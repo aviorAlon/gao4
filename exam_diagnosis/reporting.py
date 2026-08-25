@@ -2,6 +2,9 @@ from __future__ import annotations
 from html import escape
 from typing import Any
 
+PRIORITY_LABELS = {'high': '高', 'medium': '中', 'low': '低', 'none': '暂无错题'}
+SEVERITY_LABELS = {'warning': '需注意', 'info': '提示'}
+
 def text(value: Any) -> str:
     return '' if value is None else str(value)
 
@@ -13,6 +16,12 @@ def render_markdown(report: dict[str, Any]) -> str:
         rendered = '；'.join('{} v{}'.format(text(item.get('name')), item.get('version')) for item in versions)
         lines.append(f'- 分析依据的考试解析版本：{rendered}')
     lines.append('')
+    flags = report.get('quality_flags')
+    if flags:
+        lines.append('## 结论可信度提示')
+        for flag in flags:
+            lines.append(f"- [{SEVERITY_LABELS.get(flag.get('severity'), flag.get('severity', ''))}] {flag.get('message', '')}")
+        lines.append('')
     scope = report.get('scope_coverage')
     if scope:
         lines.extend([
@@ -35,7 +44,12 @@ def render_markdown(report: dict[str, Any]) -> str:
     for chapter, points in report.get('knowledge_tree', {}).items():
         lines.append(f'### {chapter}')
         for name, stats in points.items():
-            lines.append(f"- {name}：错题 {stats.get('wrong_count', 0)}")
+            lines.append(f"- {name}：错题 {stats.get('wrong_count', 0)}/{stats.get('question_count', 0)}；错误率 {stats.get('error_rate', 0)}；复习优先级 {PRIORITY_LABELS.get(stats.get('review_priority'), '未评估')}")
+    review_order = report.get('review_order')
+    if review_order:
+        lines.extend(['', '## 复习优先顺序'])
+        for index, item in enumerate(review_order, start=1):
+            lines.append(f"{index}. {item.get('chapter', '')} / {item.get('name', '')}：优先级 {PRIORITY_LABELS.get(item.get('review_priority'), '未评估')}（错题 {item.get('wrong_count', 0)}/{item.get('question_count', 0)}）")
     lines.extend(['', '## 错题集'])
     for item in report.get('wrong_question_collection', []):
         lines.append(f"- 题干：{item.get('question_text', '')}；学生答案：{item.get('student_answer', '')}；错因：{item.get('root_cause', '')}；规避建议：{item.get('avoidance_advice', '')}；原题证据：{item.get('original_source', {})}")
@@ -51,6 +65,12 @@ def render_html(report: dict[str, Any]) -> str:
     if versions:
         rendered = '；'.join('{} v{}'.format(text(item.get('name')), item.get('version')) for item in versions)
         lines.append(f'<p>分析依据的考试解析版本：{escape(rendered)}</p>')
+    flags = report.get('quality_flags')
+    if flags:
+        lines.append('<section><h2>结论可信度提示</h2><ul>')
+        for flag in flags:
+            lines.append(f'<li>[{escape(SEVERITY_LABELS.get(flag.get("severity"), text(flag.get("severity"))))}] {escape(text(flag.get("message")))}</li>')
+        lines.append('</ul></section>')
     scope = report.get('scope_coverage')
     if scope:
         lines.append('<section><h2>课程范围与资料覆盖范围</h2><ul>')
@@ -69,9 +89,16 @@ def render_html(report: dict[str, Any]) -> str:
     for chapter, points in report.get('knowledge_tree', {}).items():
         lines.append(f'<h3>{escape(chapter)}</h3><ul>')
         for name, stats in points.items():
-            lines.append(f'<li>{escape(name)}：错题 {stats.get("wrong_count", 0)}</li>')
+            lines.append(f'<li>{escape(name)}：错题 {stats.get("wrong_count", 0)}/{stats.get("question_count", 0)}；错误率 {stats.get("error_rate", 0)}；复习优先级 {escape(PRIORITY_LABELS.get(stats.get("review_priority"), "未评估"))}</li>')
         lines.append('</ul>')
-    lines.append('</section><section><h2>错题集</h2><ul>')
+    lines.append('</section>')
+    review_order = report.get('review_order')
+    if review_order:
+        lines.append('<section><h2>复习优先顺序</h2><ol>')
+        for item in review_order:
+            lines.append(f'<li>{escape(text(item.get("chapter")))} / {escape(text(item.get("name")))}：优先级 {escape(PRIORITY_LABELS.get(item.get("review_priority"), "未评估"))}（错题 {item.get("wrong_count", 0)}/{item.get("question_count", 0)}）</li>')
+        lines.append('</ol></section>')
+    lines.append('<section><h2>错题集</h2><ul>')
     for item in report.get('wrong_question_collection', []):
         lines.append(f'<li>题干：{escape(text(item.get("question_text")))}；学生答案：{escape(text(item.get("student_answer")))}；错因：{escape(text(item.get("root_cause")))}；规避建议：{escape(text(item.get("avoidance_advice")))}</li>')
     lines.append('</ul></section><section><h2>验证题</h2><ul>')

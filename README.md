@@ -62,6 +62,13 @@ PYTHONPATH=. pytest -q
 - 首页“解析确认”里可以直接改页序、材料类型、是否计入解析统计，对应 `PATCH /api/pages/{page_id}`。
 - 考试确认后出现“得分与批改”列表，可以填每题得分、满分和教师批注，对应 `PATCH /api/question-records/{record_id}`，失分自动计算。
 
+## 复习优先级与结论可信度
+
+- 知识树每个节点带 `question_count`、`wrong_count`、`error_rate`、`review_priority` 和 `priority_score`；优先级看错误率不只看错题数，一错一（1/1）比十错一（1/10）更值得复习。
+- 报告的 `review_order` 按优先级给出复习顺序，Markdown/HTML 导出里是“复习优先顺序”一节。
+- 报告的 `quality_flags` 把散落各处的“这个结论只能算部分成立”统一成一份清单：资料不完整、页面需人工确认、置信度偏低、页面被排除、题目未映射到知识点、得分未录入，每条都带 `code`、`severity` 和给人看的 `message`。
+- 导出报告里对应“结论可信度提示”一节；没有任何提示时该节不出现。
+
 ## 课程范围与资料覆盖范围
 
 报告的 `scope_coverage` 把知识库分区的课程范围和本次考试资料实际考查到的范围分开呈现，Markdown/HTML 导出同样有这一节：

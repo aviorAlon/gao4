@@ -815,6 +815,30 @@ def build_scope_coverage(partition, coverage: dict):
         'note': SCOPE_COVERAGE_NOTE, 'points': points,
     }
 
+LOW_CONFIDENCE_THRESHOLD = 0.8
+
+def build_quality_flags(exam_ids: list[str], records: list[dict], unmapped: list[str]) -> list[dict]:
+    """One report-level list so the reader never has to hunt for caveats across sections."""
+    flags = []
+    for exam_id in exam_ids:
+        exam = EXAMS[exam_id]
+        missing = (exam.get('completeness') or {}).get('missing', [])
+        if missing:
+            flags.append({'code': 'incomplete_materials', 'severity': 'warning', 'exam_id': exam_id, 'exam_name': exam['name'], 'detail': missing, 'message': f"考试「{exam['name']}」缺少：{'、'.join(missing)}，相关结论只能算部分成立"})
+        for page in sorted(pages_for_exam(exam_id), key=lambda item: item.get('page_order', 0)):
+            if page.get('ocr_status') == 'manual_confirmation_required':
+                flags.append({'code': 'manual_confirmation_required', 'severity': 'warning', 'exam_id': exam_id, 'page_id': page['id'], 'message': f"页面 {page.get('filename', '')} 未能自动解析，内容以人工确认为准"})
+            elif page.get('ocr_confidence', 0) < LOW_CONFIDENCE_THRESHOLD:
+                flags.append({'code': 'low_confidence_page', 'severity': 'info', 'exam_id': exam_id, 'page_id': page['id'], 'detail': page.get('ocr_confidence', 0), 'message': f"页面 {page.get('filename', '')} 识别置信度 {page.get('ocr_confidence', 0)}，低于 {LOW_CONFIDENCE_THRESHOLD}"})
+        for excluded in exam.get('excluded_pages', []):
+            flags.append({'code': 'page_excluded', 'severity': 'warning', 'exam_id': exam_id, 'page_id': excluded['page_id'], 'detail': excluded['reason'], 'message': f"页面 {excluded['filename']} 因 {excluded['reason']} 未计入统计，少算 {excluded['questions_excluded']} 道题"})
+    if unmapped:
+        flags.append({'code': 'unmapped_questions', 'severity': 'warning', 'detail': unmapped, 'message': f'有 {len(unmapped)} 道题没有匹配到知识点，未进入知识树和覆盖率'})
+    without_score = [record['id'] for record in records if record['score'].get('obtained') is None]
+    if without_score:
+        flags.append({'code': 'missing_scores', 'severity': 'info', 'detail': without_score, 'message': f'有 {len(without_score)} 道题没有录入得分，失分分析不完整'})
+    return flags
+
 @app.get('/api/analysis-runs/{rid}/report')
 def get_analysis_report(rid: str):
     run = RUNS.get(rid)
@@ -860,6 +884,7 @@ def get_analysis_report(rid: str):
         'unmapped_question_ids': unmapped, 'knowledge_base': partition.describe(),
         'scope_coverage': build_scope_coverage(partition, coverage),
         'exam_versions': selected,
+        'quality_flags': build_quality_flags(run['exam_ids'], records, unmapped),
         'source_question_ids': [record['id'] for record in records],
     }
     report.update(diagnose_records(records))
