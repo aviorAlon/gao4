@@ -4,6 +4,24 @@ from exam_diagnosis.app import app
 
 client = TestClient(app)
 
+
+def test_submission_survives_application_restart(tmp_path, monkeypatch):
+    db_path = tmp_path / 'restart.sqlite3'
+    monkeypatch.setenv('EXAM_DIAGNOSIS_DB', str(db_path))
+    import importlib
+    import exam_diagnosis.app as app_module
+    importlib.reload(app_module)
+    first = TestClient(app_module.app)
+    created = first.post('/api/submissions', json={
+        'stage': 'high', 'subject': '数学', 'province': '广东',
+        'school_grade': '高中二年级', 'academic_year_label': '25-26',
+    }).json()
+    importlib.reload(app_module)
+    second = TestClient(app_module.app)
+    response = second.get(f"/api/submissions/{created['id']}")
+    assert response.status_code == 200
+    assert response.json()['id'] == created['id']
+
 def test_create_submission_locks_single_subject_and_scope():
     response = client.post('/api/submissions', json={
         'stage': 'high', 'subject': '数学', 'province': '广东',
