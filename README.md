@@ -62,6 +62,13 @@ PYTHONPATH=. pytest -q
 - 首页“解析确认”里可以直接改页序、材料类型、是否计入解析统计，对应 `PATCH /api/pages/{page_id}`。
 - 考试确认后出现“得分与批改”列表，可以填每题得分、满分和教师批注，对应 `PATCH /api/question-records/{record_id}`，失分自动计算。
 
+## 验证题答案复核门禁
+
+- 报告生成后会跑一个独立审查阶段（`report.review`），检查错因专题的知识点映射、证据引用，以及每道验证题的参考答案、知识点和来源题目。
+- 审查不通过的验证题标记为 `needs_review`，`GET /api/verification-questions/{id}` 和列表接口都会把 `answer` 置空并给出 `answer_withheld` 与 `withheld_reason`，Markdown/HTML 导出显示“未通过复核，答案暂不展示”。
+- 学生仍然可以作答未复核的验证题，被挡住的只是参考答案。
+- `POST /api/verification-questions/{id}/review` 传 `{approved, answer, note}` 完成人工复核；空答案不允许通过，返回 422 `cannot_approve_empty_answer`。复核通过后报告里的答案随即放开，分析结果本身不会重算。
+
 ## 复习优先级与结论可信度
 
 - 知识树每个节点带 `question_count`、`wrong_count`、`error_rate`、`review_priority` 和 `priority_score`；优先级看错误率不只看错题数，一错一（1/1）比十错一（1/10）更值得复习。

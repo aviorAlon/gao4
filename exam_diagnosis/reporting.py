@@ -5,8 +5,16 @@ from typing import Any
 PRIORITY_LABELS = {'high': '高', 'medium': '中', 'low': '低', 'none': '暂无错题'}
 SEVERITY_LABELS = {'warning': '需注意', 'info': '提示'}
 
+WITHHELD_ANSWER = '（未通过复核，答案暂不展示）'
+
 def text(value: Any) -> str:
     return '' if value is None else str(value)
+
+
+def answer_or_withheld(question: dict[str, Any]) -> str:
+    if question.get('answer_withheld'):
+        return WITHHELD_ANSWER + '：' + '；'.join(question.get('withheld_reason', []))
+    return text(question.get('answer'))
 
 
 def render_markdown(report: dict[str, Any]) -> str:
@@ -55,7 +63,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         lines.append(f"- 题干：{item.get('question_text', '')}；学生答案：{item.get('student_answer', '')}；错因：{item.get('root_cause', '')}；规避建议：{item.get('avoidance_advice', '')}；原题证据：{item.get('original_source', {})}")
     lines.extend(['', '## 验证题'])
     for question in report.get('verification_questions', []):
-        lines.append(f"- 题目：{question.get('question_text', question.get('prompt', ''))}；答案要点：{question.get('answer', '')}")
+        lines.append(f"- 题目：{question.get('question_text', question.get('prompt', ''))}；答案要点：{answer_or_withheld(question)}")
     return '\n'.join(lines) + '\n'
 
 
@@ -103,6 +111,6 @@ def render_html(report: dict[str, Any]) -> str:
         lines.append(f'<li>题干：{escape(text(item.get("question_text")))}；学生答案：{escape(text(item.get("student_answer")))}；错因：{escape(text(item.get("root_cause")))}；规避建议：{escape(text(item.get("avoidance_advice")))}</li>')
     lines.append('</ul></section><section><h2>验证题</h2><ul>')
     for question in report.get('verification_questions', []):
-        lines.append(f'<li>验证题：{escape(text(question.get("question_text", question.get("prompt"))))}；验证题答案：{escape(text(question.get("answer")))}</li>')
+        lines.append(f'<li>验证题：{escape(text(question.get("question_text", question.get("prompt"))))}；验证题答案：{escape(answer_or_withheld(question))}</li>')
     lines.append('</ul></section>')
     return '<!doctype html><html><head><meta charset="utf-8"><title>Exam Diagnosis</title></head><body>' + ''.join(lines) + '</body></html>'

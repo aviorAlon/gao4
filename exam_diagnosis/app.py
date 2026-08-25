@@ -11,6 +11,7 @@ from .knowledge import match_knowledge_points
 from .diagnosis import diagnose_records
 from .storage import SQLiteMapping
 from .knowledge import KnowledgePartitionNotFound, available_partitions, find_partition
+from .review import APPROVED, NEEDS_REVIEW, review_report, withhold_unreviewed_answer
 
 LOCAL_USER_ID = 'local'
 USER_HEADER = 'X-User-Id'
@@ -98,7 +99,7 @@ def home():
     <section id="draft-section" hidden><h2>解析确认</h2><h3>页面与材料</h3><div id="page-list"></div><p id="excluded-pages"></p>
     <h3>题目草稿</h3><div id="draft"></div><button id="manual-question" type="button">手工新增题目</button><button id="save-draft">保存编辑</button><button id="confirm-exam">确认本次考试</button>
     <h3>得分与批改</h3><div id="record-list"></div></section>
-    <section id="analysis-section" hidden><h2>分析与报告</h2><div id="analysis-history"></div><button id="start-analysis">确认并开始分析</button><button id="load-report">查看报告</button><pre id="report"></pre><div id="export-links"><a id="export-md">导出 Markdown</a> <a id="export-html">导出 HTML</a></div><div id="verification-list"></div><div id="mastery-status"></div></section></main>
+    <section id="analysis-section" hidden><h2>分析与报告</h2><div id="analysis-history"></div><button id="start-analysis">确认并开始分析</button><button id="load-report">查看报告</button><h3>结论可信度提示</h3><ul id="quality-flags"></ul><pre id="report"></pre><div id="export-links"><a id="export-md">导出 Markdown</a> <a id="export-html">导出 HTML</a></div><div id="verification-list"></div><div id="mastery-status"></div></section></main>
     <script>
     let submission, exam, session, job, run, partitions=[], pageIndex={};
     const status = m => document.querySelector('#status').textContent=m;
@@ -128,7 +129,11 @@ def home():
     const loadAnalysisHistory=async()=>{const h=await api(`/api/submissions/${submission.id}/analysis-runs`); document.querySelector('#analysis-history').innerHTML=h.runs.map(x=>`<button data-run="${x.id}">${x.id} ${x.status}</button>`).join(''); document.querySelectorAll('[data-run]').forEach(b=>b.onclick=()=>{run={id:b.dataset.run}; document.querySelector('#load-report').click();});};
     document.querySelector('#start-analysis').onclick = async () => {const selected=[...document.querySelectorAll('[data-analysis-exam]:checked')].map(x=>x.value); run=await api(`/api/submissions/${submission.id}/analysis-runs`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({exam_ids:selected.length?selected:[exam.id]})}); await api(`/api/analysis-runs/${run.id}/confirm-start`,{method:'POST'}); status('分析已开始'); await loadAnalysisHistory();};
     const loadMastery=async()=>{const m=await api(`/api/submissions/${submission.id}/mastery-records`); document.querySelector('#mastery-status').textContent=m.records.map(x=>x.knowledge_id+': '+x.status).join(' | ');};
-    document.querySelector('#load-report').onclick = async () => {const r=await api(`/api/analysis-runs/${run.id}/report`); document.querySelector('#report').textContent=JSON.stringify(r,null,2); document.querySelector('#export-md').href=`/api/reports/${run.id}/export?format=md`; document.querySelector('#export-html').href=`/api/reports/${run.id}/export?format=html`; const q=await api(`/api/analysis-runs/${run.id}/verification-questions`); document.querySelector('#verification-list').innerHTML=q.questions.map(x=>`<div data-verification="${x.id}"><p>${x.question_text}</p><input class="verification-answer" placeholder="输入答案"><input class="verification-score" type="number" value="8"><input class="verification-duration_seconds" type="number" value="60"><button class="submit-verification">提交验证</button><span></span></div>`).join(''); document.querySelectorAll('.submit-verification').forEach(b=>b.onclick=async()=>{const box=b.closest('[data-verification]'); const answer=box.querySelector('.verification-answer').value; const score=Number(box.querySelector('.verification-score').value); const duration_seconds=Number(box.querySelector('.verification-duration_seconds').value); const result=await api(`/api/verification-questions/${box.dataset.verification}/attempts`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({answer,score,max_score:10,duration_seconds})}); box.querySelector('span').textContent=result.passed?'通过':'未通过'; await loadMastery();}); await loadMastery();};
+    const showVerifications = async () => {const q=await api(`/api/analysis-runs/${run.id}/verification-questions`);
+      document.querySelector('#verification-list').innerHTML=q.questions.map(x=>`<div data-verification="${x.id}"><p>${x.question_text}</p><p class="reference-answer">参考答案：${x.answer_withheld?`<em>未通过复核，答案暂不展示（${(x.withheld_reason||[]).join('；')}）</em>`:x.answer}</p><div class="answer-review"><input class="review-answer" placeholder="复核后的参考答案" value="${x.answer_withheld?'':x.answer||''}"><button class="approve-answer" type="button">复核通过并发布答案</button></div><input class="verification-answer" placeholder="输入答案"><input class="verification-score" type="number" value="8"><input class="verification-duration_seconds" type="number" value="60"><button class="submit-verification">提交验证</button><span></span></div>`).join('');
+      document.querySelectorAll('.approve-answer').forEach(b=>b.onclick=async()=>{const box=b.closest('[data-verification]'); try{await api(`/api/verification-questions/${box.dataset.verification}/review`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({approved:true,answer:box.querySelector('.review-answer').value})});}catch(err){return status('复核失败：'+err.message);} await showVerifications(); status('答案已复核通过');});
+      document.querySelectorAll('.submit-verification').forEach(b=>b.onclick=async()=>{const box=b.closest('[data-verification]'); const answer=box.querySelector('.verification-answer').value; const score=Number(box.querySelector('.verification-score').value); const duration_seconds=Number(box.querySelector('.verification-duration_seconds').value); const result=await api(`/api/verification-questions/${box.dataset.verification}/attempts`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({answer,score,max_score:10,duration_seconds})}); box.querySelector('span').textContent=result.passed?'通过':'未通过'; await loadMastery();});};
+    document.querySelector('#load-report').onclick = async () => {const r=await api(`/api/analysis-runs/${run.id}/report`); document.querySelector('#report').textContent=JSON.stringify(r,null,2); document.querySelector('#export-md').href=`/api/reports/${run.id}/export?format=md`; document.querySelector('#export-html').href=`/api/reports/${run.id}/export?format=html`; document.querySelector('#quality-flags').innerHTML=(r.quality_flags||[]).map(f=>`<li>${f.message}</li>`).join(''); await showVerifications(); await loadMastery();};
     </script></body></html>'''
 
 class SubmissionIn(BaseModel):
@@ -196,6 +201,11 @@ class VerificationAttemptIn(BaseModel):
     score: float
     max_score: float
     duration_seconds: int = 0
+
+class VerificationReviewIn(BaseModel):
+    approved: bool
+    answer: str | None = None
+    note: str = ''
 
 @app.post('/api/submissions', status_code=201)
 def create_submission(body: SubmissionIn, user_id: str = Depends(current_user_id)):
@@ -888,6 +898,9 @@ def get_analysis_report(rid: str):
         'source_question_ids': [record['id'] for record in records],
     }
     report.update(diagnose_records(records))
+    report['review'] = review_report(report, partition)
+    if report['review']['status'] != APPROVED:
+        report['quality_flags'].append({'code': 'review_pending', 'severity': 'warning', 'detail': [item['code'] for item in report['review']['findings']], 'message': f"独立审查发现 {len(report['review']['findings'])} 处问题，{report['review']['pending_verification_questions']} 道验证题的参考答案在复核通过前不会展示"})
     verification_ids = []
     for generated in report['verification_questions']:
         vid = str(uuid4())
@@ -898,22 +911,53 @@ def get_analysis_report(rid: str):
             MASTERY_RECORDS[mastery_id] = {'id': mastery_id, 'submission_id': run['submission_id'], 'user_id': run.get('user_id', LOCAL_USER_ID), 'knowledge_id': generated['knowledge_id'], 'error_cluster': generated['target_error'], 'status': 'not_started', 'attempt_history': []}
         verification_ids.append(vid)
     report['verification_question_ids'] = verification_ids
+    report['verification_questions'] = [withhold_unreviewed_answer(item) for item in report['verification_questions']]
     run['status'] = 'report_ready'
     run['report'] = report
     return report
+
+def refresh_report_verification_questions(rid: str):
+    run = RUNS.get(rid)
+    if not run or not run.get('report'):
+        return
+    entities = {item['id']: item for item in VERIFICATION_QUESTIONS.values() if item['analysis_run_id'] == rid}
+    report = run['report']
+    report['verification_questions'] = [withhold_unreviewed_answer(entities[vid]) for vid in report.get('verification_question_ids', []) if vid in entities]
+    pending = [item for item in entities.values() if item.get('review_status') == NEEDS_REVIEW]
+    unresolved = [item for item in report['review']['findings'] if item['code'].startswith('cluster_')]
+    report['review']['pending_verification_questions'] = len(pending)
+    report['review']['status'] = NEEDS_REVIEW if (pending or unresolved) else APPROVED
+    RUNS[rid] = run
 
 @app.get('/api/analysis-runs/{rid}/verification-questions')
 def list_verification_questions(rid: str):
     if rid not in RUNS:
         return JSONResponse({'error': 'run_not_found'}, status_code=404)
-    return {'analysis_run_id': rid, 'questions': [item for item in VERIFICATION_QUESTIONS.values() if item['analysis_run_id'] == rid]}
+    return {'analysis_run_id': rid, 'questions': [withhold_unreviewed_answer(item) for item in VERIFICATION_QUESTIONS.values() if item['analysis_run_id'] == rid]}
 
 @app.get('/api/verification-questions/{question_id}')
 def get_verification_question(question_id: str):
     item = VERIFICATION_QUESTIONS.get(question_id)
     if not item:
         return JSONResponse({'error': 'verification_question_not_found'}, status_code=404)
-    return item
+    return withhold_unreviewed_answer(item)
+
+@app.post('/api/verification-questions/{question_id}/review')
+def review_verification_answer(question_id: str, body: VerificationReviewIn):
+    question = VERIFICATION_QUESTIONS.get(question_id)
+    if not question:
+        return JSONResponse({'error': 'verification_question_not_found'}, status_code=404)
+    answer = (body.answer if body.answer is not None else question.get('answer')) or ''
+    if body.approved and not answer.strip():
+        return JSONResponse({'error': 'cannot_approve_empty_answer'}, status_code=422)
+    question['answer'] = answer
+    question['review_status'] = APPROVED if body.approved else NEEDS_REVIEW
+    question['review_findings'] = [] if body.approved else question.get('review_findings', []) or ['answer_missing']
+    question['reviewed_by'] = 'user'
+    question['review_note'] = body.note
+    VERIFICATION_QUESTIONS[question_id] = question
+    refresh_report_verification_questions(question['analysis_run_id'])
+    return withhold_unreviewed_answer(question)
 
 @app.post('/api/verification-questions/{question_id}/attempts', status_code=201)
 def submit_verification_attempt(question_id: str, body: VerificationAttemptIn):
