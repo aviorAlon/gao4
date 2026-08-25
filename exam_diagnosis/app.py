@@ -16,7 +16,6 @@ app = FastAPI(title="Exam Diagnosis", version="0.1.0")
 SUBMISSIONS = SQLiteMapping('submissions')
 EXAMS = SQLiteMapping('exams')
 ASSETS = SQLiteMapping('assets')
-QUESTIONS = SQLiteMapping('questions')
 RUNS = SQLiteMapping('runs')
 UPLOAD_SESSIONS = SQLiteMapping('upload_sessions')
 JOBS = SQLiteMapping('jobs')
@@ -25,7 +24,7 @@ QUESTION_RECORDS = SQLiteMapping('question_records')
 VERIFICATION_QUESTIONS = SQLiteMapping('verification_questions')
 MASTERY_RECORDS = SQLiteMapping('mastery_records')
 
-_PERSISTENT_MAPPINGS = (SUBMISSIONS, EXAMS, ASSETS, QUESTIONS, RUNS, UPLOAD_SESSIONS, JOBS, PAGES, QUESTION_RECORDS, VERIFICATION_QUESTIONS, MASTERY_RECORDS)
+_PERSISTENT_MAPPINGS = (SUBMISSIONS, EXAMS, ASSETS, RUNS, UPLOAD_SESSIONS, JOBS, PAGES, QUESTION_RECORDS, VERIFICATION_QUESTIONS, MASTERY_RECORDS)
 
 def safe_remove_asset_file(asset: dict):
     path = Path(asset.get('storage_path', '')).resolve()
@@ -293,9 +292,9 @@ def upload_session_asset(session_id: str, file: UploadFile = File(...)):
     if len(content) > 10 * 1024 * 1024:
         return JSONResponse({'error': 'file_too_large', 'max_bytes': 10 * 1024 * 1024}, status_code=413)
     digest = hashlib.sha256(content).hexdigest()
-    duplicate = next((asset for asset in ASSETS.values() if asset['exam_id'] == session['exam_id'] and asset.get('sha256') == digest and (asset['filename'] == filename or Path(filename).stem.lower() in {'copy', 'duplicate'})), None)
+    duplicate = next((asset for asset in ASSETS.values() if asset['exam_id'] == session['exam_id'] and asset.get('sha256') == digest), None)
     if duplicate:
-        return JSONResponse({'error': 'duplicate_asset', 'duplicate_asset_id': duplicate['id']}, status_code=409)
+        return JSONResponse({'error': 'duplicate_asset', 'duplicate_asset_id': duplicate['id'], 'duplicate_filename': duplicate['filename'], 'sha256': digest}, status_code=409)
     exam_id = session['exam_id']
     aid = str(uuid4())
     data = Path('data/uploads') / exam_id / session_id
@@ -573,6 +572,21 @@ def reopen_exam(eid: str):
         QUESTION_RECORDS[record['id']] = record
     return {'id': eid, 'status': exam['status'], 'version': exam['version'], 'superseded_version': superseded_version}
 
+TRACEABLE_QUESTION_FIELDS = ('question_number', 'question_text', 'is_wrong_question', 'original_question_available', 'student_answer')
+
+def confirmed_provenance(draft: dict, confirmed: dict) -> dict:
+    """Close the machine -> user -> confirmed chain so it survives beyond the parse draft."""
+    draft_provenance = draft.get('provenance', {})
+    chain = {}
+    for field in TRACEABLE_QUESTION_FIELDS:
+        edited = draft_provenance.get(field, {})
+        chain[field] = {
+            'machine_value': edited.get('machine_value', draft.get(field)),
+            'user_value': edited.get('user_value'),
+            'confirmed_value': confirmed.get(field),
+        }
+    return chain
+
 @app.post('/api/exams/{eid}/confirm')
 def confirm_exam(eid: str, body: ConfirmIn):
     exam=EXAMS.get(eid)
@@ -588,22 +602,30 @@ def confirm_exam(eid: str, body: ConfirmIn):
         return JSONResponse({'error': 'original_source_required'}, status_code=422)
     confirmed_questions = []
     for index, question in enumerate(questions):
+        draft = draft_questions[index] if index < len(draft_questions) else {}
         item = {'id': str(uuid4()), **question.model_dump(), 'confirmation_status': 'confirmed'}
         if question.original_source:
             item['original_source'] = question.original_source
-        elif index < len(draft_questions) and draft_questions[index].get('original_source'):
-            item['original_source'] = draft_questions[index]['original_source']
+        elif draft.get('original_source'):
+            item['original_source'] = draft['original_source']
+        item['provenance'] = confirmed_provenance(draft, item)
         confirmed_questions.append(item)
     exam['questions'] = confirmed_questions
     exam['status'] = 'confirmed'
     exam.setdefault('version', 1)
-    exam['completeness'] = {
+    material_types = {asset.get('material_type') for asset in assets_for_exam(eid)}
+    completeness = {
         'has_wrong_questions': bool(wrong),
         'has_original_sources': all(
             bool(item.get('original_source'))
             for item in confirmed_questions if item['is_wrong_question']
         ),
+        'has_answer_key': 'answer_key' in material_types,
+        'has_student_answers': any(item.get('student_answer') for item in confirmed_questions),
+        'has_corrections': 'correction' in material_types,
     }
+    completeness['missing'] = sorted(key for key, present in completeness.items() if not present)
+    exam['completeness'] = completeness
     records = []
     for item in confirmed_questions:
         record = {
@@ -614,6 +636,7 @@ def confirm_exam(eid: str, body: ConfirmIn):
             'student_answer': {'text': item.get('student_answer')},
             'score': {'obtained': None, 'total': None, 'lost_points': None},
             'correction': {'teacher_comment': ''},
+            'provenance': item.get('provenance', {}),
             'status': 'confirmed',
         }
         QUESTION_RECORDS[record['id']] = record

@@ -15,7 +15,6 @@ def _cause(comment: str) -> str:
 
 def diagnose_records(records: list[dict[str, Any]]) -> dict[str, Any]:
     wrong = [record for record in records if record.get('is_wrong_question')]
-    enriched = []
     causes = Counter()
     groups: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for record in records:

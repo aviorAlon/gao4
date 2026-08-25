@@ -103,10 +103,6 @@ class LocalParser:
         return "unknown"
 
 
-class ManualConfirmationRequired(Exception):
-    pass
-
-
 class OpenAICompatibleVisionParser(LocalParser):
     def __init__(self, base_url: str | None = None, api_key: str | None = None, model: str | None = None, timeout: float = 5.0, endpoint: str | None = None):
         self.base_url = base_url or endpoint or os.getenv('EXAM_DIAGNOSIS_VISION_BASE_URL')
@@ -166,7 +162,6 @@ class OpenAICompatibleVisionParser(LocalParser):
                 ocr_status="manual_confirmation_required",
                 warning=f"视觉解析调用 failed: {exc}",
             )
-        return super().parse_page(filename, content, page_order)
 
     @staticmethod
     def classify_material(filename: str) -> str:

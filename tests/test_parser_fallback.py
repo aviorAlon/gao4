@@ -1,4 +1,4 @@
-from exam_diagnosis.parser import LocalParser, ManualConfirmationRequired, OpenAICompatibleVisionParser
+from exam_diagnosis.parser import LocalParser, OpenAICompatibleVisionParser
 
 
 def test_binary_image_without_configured_vision_requires_manual_confirmation():

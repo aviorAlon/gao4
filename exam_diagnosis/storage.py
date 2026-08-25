@@ -63,9 +63,3 @@ class SQLiteMapping(MutableMapping[str, dict[str, Any]]):
         with self._connect() as conn:
             for key, value in self._cache.items():
                 conn.execute("INSERT OR REPLACE INTO state(bucket,key,value) VALUES (?,?,?)", (self.name, key, json.dumps(value, ensure_ascii=False)))
-
-    def update_item(self, key: str, **changes: Any) -> dict[str, Any]:
-        item = dict(self[key])
-        item.update(changes)
-        self[key] = item
-        return item

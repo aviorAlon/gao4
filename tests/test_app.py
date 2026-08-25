@@ -97,7 +97,7 @@ def test_multiple_assets_are_grouped_in_an_upload_session_and_finished():
     for name in ('page-1.jpg', 'page-2.jpg'):
         response = client.post(
             f"/api/upload-sessions/{session['id']}/assets",
-            files={'file': (name, b'fake-image', 'image/jpeg')},
+            files={'file': (name, f'fake-image-{name}'.encode(), 'image/jpeg')},
         )
         assert response.status_code == 201
         assert response.json()['upload_session_id'] == session['id']
@@ -261,7 +261,7 @@ def test_parse_job_records_page_results_and_classifies_materials():
     for name in ('paper-1.jpg', 'answer-1.jpg'):
         client.post(
             f"/api/upload-sessions/{session['id']}/assets",
-            files={'file': (name, b'fake', 'image/jpeg')},
+            files={'file': (name, f'fake-{name}'.encode(), 'image/jpeg')},
         )
     job_id = client.post(f"/api/upload-sessions/{session['id']}/finish").json()['job_id']
     response = client.post(f"/api/jobs/{job_id}/run")
