@@ -3,7 +3,7 @@ from pathlib import Path
 from uuid import uuid4
 import re
 import hashlib
-from fastapi import FastAPI, File, UploadFile, Request
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 from .parser import LocalParser, OpenAICompatibleVisionParser, extract_pdf_text
@@ -12,7 +12,13 @@ from .diagnosis import diagnose_records
 from .storage import SQLiteMapping
 from .knowledge import KnowledgePartitionNotFound, available_partitions, find_partition
 
-app = FastAPI(title="Exam Diagnosis", version="0.1.0")
+LOCAL_USER_ID = 'local'
+USER_HEADER = 'X-User-Id'
+
+def current_user_id(request: Request) -> str:
+    """MVP runs as a single local user, but every resource still carries its owner."""
+    return request.headers.get(USER_HEADER) or LOCAL_USER_ID
+
 SUBMISSIONS = SQLiteMapping('submissions')
 EXAMS = SQLiteMapping('exams')
 ASSETS = SQLiteMapping('assets')
@@ -25,6 +31,21 @@ VERIFICATION_QUESTIONS = SQLiteMapping('verification_questions')
 MASTERY_RECORDS = SQLiteMapping('mastery_records')
 
 _PERSISTENT_MAPPINGS = (SUBMISSIONS, EXAMS, ASSETS, RUNS, UPLOAD_SESSIONS, JOBS, PAGES, QUESTION_RECORDS, VERIFICATION_QUESTIONS, MASTERY_RECORDS)
+
+OWNED_BY_PATH_PARAM = {
+    'sid': SUBMISSIONS, 'eid': EXAMS, 'asset_id': ASSETS, 'rid': RUNS,
+    'session_id': UPLOAD_SESSIONS, 'job_id': JOBS, 'page_id': PAGES,
+    'record_id': QUESTION_RECORDS, 'question_id': VERIFICATION_QUESTIONS,
+}
+
+def enforce_resource_owner(request: Request, user_id: str = Depends(current_user_id)):
+    """One chokepoint for the isolation boundary, so no route can forget to check it."""
+    for name, value in request.path_params.items():
+        entity = OWNED_BY_PATH_PARAM.get(name, {}).get(value) if name in OWNED_BY_PATH_PARAM else None
+        if entity and entity.get('user_id', LOCAL_USER_ID) != user_id:
+            raise HTTPException(status_code=404, detail={'error': 'resource_not_found'})
+
+app = FastAPI(title="Exam Diagnosis", version="0.1.0", dependencies=[Depends(enforce_resource_owner)])
 
 MIN_ACADEMIC_YEAR_RULE = '学年范围形如 25-26，且至少覆盖一整学年'
 
@@ -177,7 +198,7 @@ class VerificationAttemptIn(BaseModel):
     duration_seconds: int = 0
 
 @app.post('/api/submissions', status_code=201)
-def create_submission(body: SubmissionIn):
+def create_submission(body: SubmissionIn, user_id: str = Depends(current_user_id)):
     if body.stage not in {'primary','middle','high'}:
         return JSONResponse({'error':'invalid_stage'}, status_code=422)
     span = parse_academic_year_range(body.academic_year_label)
@@ -189,7 +210,7 @@ def create_submission(body: SubmissionIn):
     if not partition.covers_grade(body.school_grade):
         return JSONResponse({'error': 'grade_outside_partition_scope', 'school_grade': body.school_grade, 'academic_year_range': list(partition.academic_year_range)}, status_code=422)
     sid=str(uuid4())
-    item={'id':sid, **body.model_dump(), **span, 'curriculum_year': partition.curriculum_year, 'status':'subject_confirmed', 'exam_count':0, 'max_exam_count':10, 'knowledge_partition': partition.describe(), 'learning_scope':{'stage':body.stage,'subject':body.subject,'province':body.province,'school_grade':body.school_grade,'academic_year_label':body.academic_year_label, **span}}
+    item={'id':sid, 'user_id': user_id, **body.model_dump(), **span, 'curriculum_year': partition.curriculum_year, 'status':'subject_confirmed', 'exam_count':0, 'max_exam_count':10, 'knowledge_partition': partition.describe(), 'learning_scope':{'stage':body.stage,'subject':body.subject,'province':body.province,'school_grade':body.school_grade,'academic_year_label':body.academic_year_label, **span}}
     SUBMISSIONS[sid]=item
     return item
 
@@ -235,15 +256,15 @@ def delete_submission(sid: str):
     return {'deleted': True, 'submission_id': sid}
 
 @app.get('/api/submissions')
-def list_submissions():
-    return list(SUBMISSIONS.values())
+def list_submissions(user_id: str = Depends(current_user_id)):
+    return [item for item in SUBMISSIONS.values() if item.get('user_id', LOCAL_USER_ID) == user_id]
 
 @app.post('/api/submissions/{sid}/exams', status_code=201)
 def create_exam(sid: str, body: ExamIn):
     sub=SUBMISSIONS.get(sid)
     if not sub: return JSONResponse({'error':'submission_not_found'},status_code=404)
     if sub['exam_count'] >= 10: return JSONResponse({'error':'exam_limit_reached','max_exam_count':10},status_code=409)
-    eid=str(uuid4()); item={'id':eid,'submission_id':sid,'sequence_no':sub['exam_count']+1,**body.model_dump(),'status':'uploading','questions':[]}
+    eid=str(uuid4()); item={'id':eid,'submission_id':sid,'user_id':sub.get('user_id',LOCAL_USER_ID),'sequence_no':sub['exam_count']+1,**body.model_dump(),'status':'uploading','questions':[]}
     EXAMS[eid]=item; sub['exam_count']+=1; SUBMISSIONS[sid] = sub; return item
 
 @app.get('/api/submissions/{sid}/exams')
@@ -256,7 +277,7 @@ def list_submission_exams(sid: str):
 def upload_asset(eid: str, file: UploadFile = File(...)):
     if eid not in EXAMS: return JSONResponse({'error':'exam_not_found'},status_code=404)
     aid=str(uuid4()); data=Path('data/uploads')/eid; data.mkdir(parents=True,exist_ok=True); filename=Path(file.filename).name; path=data/filename
-    path.write_bytes(file.file.read()); item={'id':aid,'exam_id':eid,'filename':filename,'storage_path':str(path),'media_type':file.content_type,'status':'received'}; ASSETS[aid]=item; return item
+    path.write_bytes(file.file.read()); item={'id':aid,'exam_id':eid,'user_id':EXAMS[eid].get('user_id',LOCAL_USER_ID),'filename':filename,'storage_path':str(path),'media_type':file.content_type,'status':'received'}; ASSETS[aid]=item; return item
 
 @app.get('/api/exams/{eid}/assets')
 def list_exam_assets(eid: str):
@@ -297,7 +318,7 @@ def create_upload_session(eid: str):
     if eid not in EXAMS:
         return JSONResponse({'error': 'exam_not_found'}, status_code=404)
     session_id = str(uuid4())
-    item = {'id': session_id, 'exam_id': eid, 'status': 'uploading', 'asset_ids': []}
+    item = {'id': session_id, 'exam_id': eid, 'user_id': EXAMS[eid].get('user_id', LOCAL_USER_ID), 'status': 'uploading', 'asset_ids': []}
     UPLOAD_SESSIONS[session_id] = item
     return item
 
@@ -329,6 +350,7 @@ def upload_session_asset(session_id: str, file: UploadFile = File(...)):
     path.write_bytes(content)
     item = {
         'id': aid, 'exam_id': exam_id, 'upload_session_id': session_id,
+        'user_id': session.get('user_id', LOCAL_USER_ID),
         'filename': filename, 'storage_path': str(path),
         'media_type': file.content_type, 'page_order': len(session['asset_ids']) + 1,
         'material_type': 'unknown', 'ocr_status': 'pending', 'status': 'received', 'sha256': digest,
@@ -351,6 +373,7 @@ def finish_upload_session(session_id: str):
     job_id = str(uuid4())
     JOBS[job_id] = {
         'id': job_id, 'job_type': 'parse_exam', 'exam_id': session['exam_id'],
+        'user_id': session.get('user_id', LOCAL_USER_ID),
         'upload_session_id': session_id, 'status': 'queued', 'attempt': 1,
         'stages': [
             {'name': 'classify', 'status': 'queued', 'error': None},
@@ -435,7 +458,7 @@ def run_job(job_id: str):
                 result = parser.parse_page(asset['filename'], content, asset['page_order'])
                 submission = SUBMISSIONS[exam['submission_id']]
                 result.subject_mismatch = bool(result.subject and result.subject != submission['subject'])
-                page = {'id': str(uuid4()), 'asset_id': asset['id'], 'exam_id': job['exam_id'], **result.to_dict()}
+                page = {'id': str(uuid4()), 'asset_id': asset['id'], 'exam_id': job['exam_id'], 'user_id': exam.get('user_id', LOCAL_USER_ID), **result.to_dict()}
                 page['include_in_analysis'] = not page['subject_mismatch']
                 page['exclusion_reason'] = 'subject_mismatch' if page['subject_mismatch'] else ''
                 page['inclusion_decided_by'] = 'machine'
@@ -685,7 +708,7 @@ def confirm_exam(eid: str, body: ConfirmIn):
     records = []
     for item in confirmed_questions:
         record = {
-            'id': str(uuid4()), 'exam_id': eid, 'version': exam['version'],
+            'id': str(uuid4()), 'exam_id': eid, 'user_id': exam.get('user_id', LOCAL_USER_ID), 'version': exam['version'],
             'question_number': item['question_number'], 'question_text': item['question_text'],
             'is_wrong_question': item['is_wrong_question'],
             'original_source': item.get('original_source'),
@@ -753,7 +776,7 @@ def exam_versions(exam_ids: list[str]) -> list[dict]:
 def create_run(sid: str, body: AnalysisIn):
     if sid not in SUBMISSIONS: return JSONResponse({'error':'submission_not_found'},status_code=404)
     if not body.exam_ids or any(e not in EXAMS or EXAMS[e]['submission_id']!=sid or EXAMS[e]['status']!='confirmed' for e in body.exam_ids): return JSONResponse({'error':'exams_not_confirmed'},status_code=422)
-    rid=str(uuid4()); RUNS[rid]={'id':rid,'submission_id':sid,'exam_ids':body.exam_ids,'status':'awaiting_confirmation','exam_versions':exam_versions(body.exam_ids)}; return RUNS[rid]
+    rid=str(uuid4()); RUNS[rid]={'id':rid,'submission_id':sid,'user_id':SUBMISSIONS[sid].get('user_id',LOCAL_USER_ID),'exam_ids':body.exam_ids,'status':'awaiting_confirmation','exam_versions':exam_versions(body.exam_ids)}; return RUNS[rid]
 
 @app.get('/api/submissions/{sid}/analysis-runs')
 def list_analysis_runs(sid: str):
@@ -843,11 +866,11 @@ def get_analysis_report(rid: str):
     verification_ids = []
     for generated in report['verification_questions']:
         vid = str(uuid4())
-        entity = {'id': vid, 'analysis_run_id': rid, 'submission_id': run['submission_id'], **generated, 'attempts': []}
+        entity = {'id': vid, 'analysis_run_id': rid, 'submission_id': run['submission_id'], 'user_id': run.get('user_id', LOCAL_USER_ID), **generated, 'attempts': []}
         VERIFICATION_QUESTIONS[vid] = entity
         mastery_id = f"{run['submission_id']}:{generated['knowledge_id']}:{generated['target_error']}"
         if mastery_id not in MASTERY_RECORDS:
-            MASTERY_RECORDS[mastery_id] = {'id': mastery_id, 'submission_id': run['submission_id'], 'knowledge_id': generated['knowledge_id'], 'error_cluster': generated['target_error'], 'status': 'not_started', 'attempt_history': []}
+            MASTERY_RECORDS[mastery_id] = {'id': mastery_id, 'submission_id': run['submission_id'], 'user_id': run.get('user_id', LOCAL_USER_ID), 'knowledge_id': generated['knowledge_id'], 'error_cluster': generated['target_error'], 'status': 'not_started', 'attempt_history': []}
         verification_ids.append(vid)
     report['verification_question_ids'] = verification_ids
     run['status'] = 'report_ready'
