@@ -24,8 +24,8 @@ PYTHONPATH=. pytest -q
 - 可通过 `EXAM_DIAGNOSIS_DB` 指定数据库路径。
 - 上传文件默认写入 `data/uploads/`，该目录被 `.gitignore` 忽略。
 - 知识库资源目录：`data/knowledge/`，可通过 `EXAM_DIAGNOSIS_KNOWLEDGE_DIR` 指定。
-- 目录下每个 YAML 是一个知识库分区，必须声明 `stage`、`subject`、`province`、`version` 和 `knowledge_points`；同一组 `stage/subject/province` 只允许一个分区。
-- 当前随仓库发布的分区只有 `high_math_guangdong_v1.yaml`（高中 / 数学 / 广东，版本 1.1.0），但代码不写死该分区，新增 YAML 即可启用新的阶段、科目或省份。
+- 目录下每个 YAML 是一个知识库分区，必须声明 `stage`、`subject`、`province`、`curriculum_year`、`academic_year_range`、`version` 和 `knowledge_points`；同一组 `stage/subject/province/curriculum_year` 只允许一个分区。
+- 当前随仓库发布的分区只有 `high_math_guangdong_v1.yaml`（高中 / 数学 / 广东 / 2017 课标），但代码不写死该分区，新增 YAML 即可启用新的阶段、科目、省份或课程方案年份。
 - 图片视觉解析只有在同时配置以下环境变量时启用：
   - `EXAM_DIAGNOSIS_VISION_BASE_URL`
   - `EXAM_DIAGNOSIS_VISION_API_KEY`
@@ -37,8 +37,11 @@ PYTHONPATH=. pytest -q
 
 - `GET /api/knowledge-partitions` 返回全部可用分区及其版本、课程标准和知识点数量。
 - 首页“知识库分区”下拉框由该接口渲染，用户无法选择没有知识库的阶段/科目/省份组合。
-- 创建任务时若 `stage/subject/province` 没有对应分区，接口返回 422 `knowledge_partition_not_found` 并附带可用分区列表，不会创建出一个永远匹配不到知识点的任务。
-- 任务、分析报告和个人数据导出都记录所用分区（阶段、科目、省份、知识库版本、课程标准），知识点匹配结果也带上分区标识，便于追溯。
+- 分区键是 `stage + subject + province + curriculum_year`；同一地区同一科目可以并存多套课程方案，创建任务不传 `curriculum_year` 时默认取最新的一套。
+- 分区的 `academic_year_range` 声明它覆盖哪些学年（如 `[高一, 高二, 高三]`）。分区内知识点的 `grade_scope` 必须落在这个范围内，否则加载即报错；创建任务时年级不在范围内会返回 422 `grade_outside_partition_scope`。
+- 创建任务时若 `stage/subject/province/curriculum_year` 没有对应分区，接口返回 422 `knowledge_partition_not_found` 并附带可用分区列表，不会创建出一个永远匹配不到知识点的任务。
+- 学年范围形如 `25-26` 或 `2025-2028`，必须至少覆盖一整学年；不足一学年（如 `25-25`）会被拒绝并返回规则说明，跨多学年则允许，任务上记录 `academic_year_start/end/span`。
+- 任务、分析报告和个人数据导出都记录所用分区（阶段、科目、省份、课程方案年份、覆盖学年、知识库版本、课程标准），知识点匹配结果也带上分区标识，便于追溯。
 
 ## 课程范围与资料覆盖范围
 

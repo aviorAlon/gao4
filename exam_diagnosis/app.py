@@ -26,6 +26,18 @@ MASTERY_RECORDS = SQLiteMapping('mastery_records')
 
 _PERSISTENT_MAPPINGS = (SUBMISSIONS, EXAMS, ASSETS, RUNS, UPLOAD_SESSIONS, JOBS, PAGES, QUESTION_RECORDS, VERIFICATION_QUESTIONS, MASTERY_RECORDS)
 
+MIN_ACADEMIC_YEAR_RULE = '学年范围形如 25-26，且至少覆盖一整学年'
+
+def parse_academic_year_range(label: str) -> dict | None:
+    """A formal diagnosis needs at least one full academic year; longer spans stay legal."""
+    match = re.fullmatch(r'(\d{2}|\d{4})-(\d{2}|\d{4})', label or '')
+    if not match or len(match.group(1)) != len(match.group(2)):
+        return None
+    start, end = int(match.group(1)), int(match.group(2))
+    if end - start < 1:
+        return None
+    return {'academic_year_start': start, 'academic_year_end': end, 'academic_year_span': end - start}
+
 def safe_remove_asset_file(asset: dict):
     path = Path(asset.get('storage_path', '')).resolve()
     allowed_root = (Path.cwd() / 'data' / 'uploads').resolve()
@@ -70,8 +82,8 @@ def home():
     const api = (url, opts={}) => fetch(url, opts).then(r => r.json().then(x => {if(!r.ok) throw Error(x.error||r.status); return x;}));
     const showSubmissions = async () => {const items=await api('/api/submissions'); document.querySelector('#submission-list').innerHTML=items.map(x=>`<button data-submission="${x.id}">${x.stage}/${x.subject}/${x.academic_year_label}（${x.exam_count}/10）</button>`).join(''); document.querySelectorAll('[data-submission]').forEach(b=>b.onclick=async()=>{submission=await api('/api/submissions/'+b.dataset.submission); document.querySelector('#exam-section').hidden=false; await showExams();});};
     const showExams = async () => {const items=await api('/api/submissions/'+submission.id+'/exams'); document.querySelector('#exam-list').innerHTML=items.map(x=>`<label><input type="checkbox" data-analysis-exam value="${x.id}" ${x.status==='confirmed'?'checked':''}>${x.name}（${x.status}）</label>`).join(''); document.querySelectorAll('[data-analysis-exam]').forEach(b=>b.onclick=async()=>{exam=await api('/api/exams/'+b.value); session=await api(`/api/exams/${exam.id}/upload-sessions`,{method:'POST'}); document.querySelector('#upload-area').hidden=false; if(exam.status==='confirmed'){document.querySelector('#analysis-section').hidden=false;}});};
-    const showPartitions = async () => {partitions=(await api('/api/knowledge-partitions')).partitions; document.querySelector('#partition-select').innerHTML=partitions.map((p,i)=>`<option value="${i}">${p.stage}/${p.subject}/${p.province}（知识库 ${p.version}）</option>`).join(''); if(!partitions.length) status('没有可用的公共知识库分区，无法创建任务');};
-    document.querySelector('#submission-form').onsubmit = async e => {e.preventDefault(); const form=Object.fromEntries(new FormData(e.target)); const chosen=partitions[Number(form.partition)]; if(!chosen) return status('请先选择知识库分区'); delete form.partition; try {submission=await api('/api/submissions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...form, stage:chosen.stage, subject:chosen.subject, province:chosen.province})});} catch(err) {return status('创建任务失败：'+err.message);} status('任务已创建：'+submission.id+'（知识库 '+chosen.version+'）'); document.querySelector('#exam-section').hidden=false; await showExams(); await showSubmissions();};
+    const showPartitions = async () => {partitions=(await api('/api/knowledge-partitions')).partitions; document.querySelector('#partition-select').innerHTML=partitions.map((p,i)=>`<option value="${i}">${p.stage}/${p.subject}/${p.province} · 课标${p.curriculum_year}（覆盖 ${p.academic_year_range.join('、')}，知识库 ${p.version}）</option>`).join(''); if(!partitions.length) status('没有可用的公共知识库分区，无法创建任务');};
+    document.querySelector('#submission-form').onsubmit = async e => {e.preventDefault(); const form=Object.fromEntries(new FormData(e.target)); const chosen=partitions[Number(form.partition)]; if(!chosen) return status('请先选择知识库分区'); delete form.partition; try {submission=await api('/api/submissions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...form, stage:chosen.stage, subject:chosen.subject, province:chosen.province, curriculum_year:chosen.curriculum_year})});} catch(err) {return status('创建任务失败：'+err.message);} status('任务已创建：'+submission.id+'（知识库 '+chosen.version+'）'); document.querySelector('#exam-section').hidden=false; await showExams(); await showSubmissions();};
     document.querySelector('#refresh-submissions').onclick=showSubmissions; showPartitions(); showSubmissions();
     document.querySelector('#export-submission').onclick=()=>{if(submission) location.href=`/api/submissions/${submission.id}/export`;}; document.querySelector('#delete-submission').onclick=async()=>{if(submission){await api(`/api/submissions/${submission.id}`,{method:'DELETE'}); submission=null; await showSubmissions();}};
     document.querySelector('#exam-form').onsubmit = async e => {e.preventDefault(); exam=await api(`/api/submissions/${submission.id}/exams`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.fromEntries(new FormData(e.target)))}); session=await api(`/api/exams/${exam.id}/upload-sessions`,{method:'POST'}); document.querySelector('#upload-area').hidden=false;};
@@ -94,6 +106,7 @@ class SubmissionIn(BaseModel):
     province: str
     school_grade: str
     academic_year_label: str
+    curriculum_year: int | None = None
     is_repeating_student: bool = False
     target_exam_year: int | None = None
 
@@ -156,14 +169,16 @@ class VerificationAttemptIn(BaseModel):
 def create_submission(body: SubmissionIn):
     if body.stage not in {'primary','middle','high'}:
         return JSONResponse({'error':'invalid_stage'}, status_code=422)
-    match = re.fullmatch(r'(\d{2}|\d{4})-(\d{2}|\d{4})', body.academic_year_label)
-    if not match or len(match.group(1)) != len(match.group(2)) or int(match.group(2)) != int(match.group(1)) + 1:
-        return JSONResponse({'error': 'invalid_academic_year'}, status_code=422)
-    partition = find_partition(body.stage, body.subject, body.province)
+    span = parse_academic_year_range(body.academic_year_label)
+    if not span:
+        return JSONResponse({'error': 'invalid_academic_year', 'rule': MIN_ACADEMIC_YEAR_RULE}, status_code=422)
+    partition = find_partition(body.stage, body.subject, body.province, body.curriculum_year)
     if partition is None:
-        return JSONResponse({'error': 'knowledge_partition_not_found', 'requested': {'stage': body.stage, 'subject': body.subject, 'province': body.province}, 'available_partitions': available_partitions()}, status_code=422)
+        return JSONResponse({'error': 'knowledge_partition_not_found', 'requested': {'stage': body.stage, 'subject': body.subject, 'province': body.province, 'curriculum_year': body.curriculum_year}, 'available_partitions': available_partitions()}, status_code=422)
+    if not partition.covers_grade(body.school_grade):
+        return JSONResponse({'error': 'grade_outside_partition_scope', 'school_grade': body.school_grade, 'academic_year_range': list(partition.academic_year_range)}, status_code=422)
     sid=str(uuid4())
-    item={'id':sid, **body.model_dump(), 'status':'subject_confirmed', 'exam_count':0, 'max_exam_count':10, 'knowledge_partition': partition.describe(), 'learning_scope':{'stage':body.stage,'subject':body.subject,'province':body.province,'school_grade':body.school_grade,'academic_year_label':body.academic_year_label}}
+    item={'id':sid, **body.model_dump(), **span, 'curriculum_year': partition.curriculum_year, 'status':'subject_confirmed', 'exam_count':0, 'max_exam_count':10, 'knowledge_partition': partition.describe(), 'learning_scope':{'stage':body.stage,'subject':body.subject,'province':body.province,'school_grade':body.school_grade,'academic_year_label':body.academic_year_label, **span}}
     SUBMISSIONS[sid]=item
     return item
 
@@ -184,7 +199,7 @@ def export_submission(sid: str):
     if not submission:
         return JSONResponse({'error': 'submission_not_found'}, status_code=404)
     exam_ids = [item['id'] for item in EXAMS.values() if item['submission_id'] == sid]
-    partition = find_partition(submission['stage'], submission['subject'], submission['province'])
+    partition = find_partition(submission['stage'], submission['subject'], submission['province'], submission.get('curriculum_year'))
     knowledge_version = partition.version if partition else None
     return {'submission': submission, 'knowledge_partition': partition.describe() if partition else None, 'exams': [EXAMS[eid] for eid in exam_ids], 'assets': [item for item in ASSETS.values() if item['exam_id'] in exam_ids], 'pages': [item for item in PAGES.values() if item['exam_id'] in exam_ids], 'question_records': [item for item in QUESTION_RECORDS.values() if item['exam_id'] in exam_ids], 'analysis_runs': [item for item in RUNS.values() if item['submission_id'] == sid], 'verification_questions': [item for item in VERIFICATION_QUESTIONS.values() if item['submission_id'] == sid], 'mastery_records': [item for item in MASTERY_RECORDS.values() if item['submission_id'] == sid], 'versions': {'export_schema': '1.0.0', 'knowledge_base': knowledge_version, 'application': app.version}}
 
@@ -672,6 +687,7 @@ def apply_knowledge_mapping(record: dict):
     matches = match_knowledge_points(
         stage=submission['stage'], subject=submission['subject'],
         province=submission['province'], question_text=record['question_text'],
+        curriculum_year=submission.get('curriculum_year'),
     )
     record['knowledge_points'] = matches
     record['knowledge_point_ids'] = [item['knowledge_id'] for item in matches]
@@ -745,7 +761,7 @@ def get_analysis_report(rid: str):
     if run['status'] != 'queued':
         return JSONResponse({'error': 'analysis_not_started'}, status_code=409)
     submission = SUBMISSIONS[run['submission_id']]
-    partition = find_partition(submission['stage'], submission['subject'], submission['province'])
+    partition = find_partition(submission['stage'], submission['subject'], submission['province'], submission.get('curriculum_year'))
     if partition is None:
         return JSONResponse({'error': 'knowledge_partition_not_found', 'requested': {'stage': submission['stage'], 'subject': submission['subject'], 'province': submission['province']}, 'available_partitions': available_partitions()}, status_code=422)
     selected = run.get('exam_versions') or exam_versions(run['exam_ids'])

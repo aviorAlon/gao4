@@ -1,11 +1,12 @@
 from pathlib import Path
 import pytest
 from exam_diagnosis.knowledge import load_versioned_knowledge, curriculum_path
+from conftest import SHIPPED_KNOWLEDGE_VERSION
 
 
 def test_guangdong_math_registry_covers_required_domains_and_schema():
     version, points = load_versioned_knowledge(Path('data/knowledge/high_math_guangdong_v1.yaml'))
-    assert version == '1.1.0'
+    assert version == SHIPPED_KNOWLEDGE_VERSION
     chapters = {p['chapter'] for p in points}
     required = {'集合与逻辑','函数','三角函数','平面向量','数列','不等式','立体几何','解析几何','概率统计','导数'}
     assert required <= chapters

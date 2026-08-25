@@ -1,7 +1,9 @@
-version: 1.1.0
+version: 1.2.0
 stage: high
 subject: 数学
 province: 广东
+curriculum_year: 2017
+academic_year_range: [高一, 高二, 高三]
 curriculum: 普通高中数学课程标准（2017年版2020年修订）
 knowledge_points:
   - knowledge_id: high.math.sets.logic
