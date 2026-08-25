@@ -7,7 +7,12 @@ def text(value: Any) -> str:
 
 
 def render_markdown(report: dict[str, Any]) -> str:
-    lines = ['# Exam Diagnosis 报告', '', f"- 错题数：{report.get('wrong_question_count', 0)}", '']
+    lines = ['# Exam Diagnosis 报告', '', f"- 错题数：{report.get('wrong_question_count', 0)}"]
+    versions = report.get('exam_versions')
+    if versions:
+        rendered = '；'.join('{} v{}'.format(text(item.get('name')), item.get('version')) for item in versions)
+        lines.append(f'- 分析依据的考试解析版本：{rendered}')
+    lines.append('')
     scope = report.get('scope_coverage')
     if scope:
         lines.extend([
@@ -42,6 +47,10 @@ def render_markdown(report: dict[str, Any]) -> str:
 
 def render_html(report: dict[str, Any]) -> str:
     lines = [f'<h1>{escape("Exam Diagnosis 报告")}</h1>', f'<p>错题数：{report.get("wrong_question_count", 0)}</p>']
+    versions = report.get('exam_versions')
+    if versions:
+        rendered = '；'.join('{} v{}'.format(text(item.get('name')), item.get('version')) for item in versions)
+        lines.append(f'<p>分析依据的考试解析版本：{escape(rendered)}</p>')
     scope = report.get('scope_coverage')
     if scope:
         lines.append('<section><h2>课程范围与资料覆盖范围</h2><ul>')

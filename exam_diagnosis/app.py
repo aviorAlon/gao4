@@ -58,7 +58,7 @@ def home():
     <style>body{font:16px sans-serif;max-width:900px;margin:2rem auto}section{border:1px solid #ddd;padding:1rem;margin:1rem 0}label{display:block;margin:.5rem 0}button{margin:.25rem;padding:.5rem}.question{border:1px solid #ccc;padding:.5rem}</style></head>
     <body><main class="exam-diagnosis"><h1>Exam Diagnosis</h1><section><h2>创建诊断任务</h2>
     <form id="submission-form"><label>知识库分区 <select id="partition-select" name="partition" required></select></label>
-    <label>年级 <input name="school_grade" value="高中二年级" required></label><label>学年 <input name="academic_year_label" value="25-26" required></label>
+    <label>年级 <input name="school_grade" value="高二" required></label><label>学年 <input name="academic_year_label" value="25-26" required></label>
     <button>创建任务</button></form><p id="status"></p></section>
     <section><h2>已有任务</h2><button id="refresh-submissions">刷新任务列表</button><button id="export-submission">导出个人数据</button><button id="delete-submission">删除任务</button><div id="submission-list"></div></section>
     <section id="exam-section" hidden><h2>考试资料</h2><form id="exam-form"><input name="name" value="月考"><button>创建考试</button></form><div id="exam-list"></div>
@@ -563,10 +563,15 @@ def reopen_exam(eid: str):
         return JSONResponse({'error': 'exam_not_found'}, status_code=404)
     if exam['status'] != 'confirmed':
         return JSONResponse({'error': 'exam_not_confirmed'}, status_code=409)
-    exam['version'] = exam.get('version', 1) + 1
+    superseded_version = exam.get('version', 1)
+    exam['version'] = superseded_version + 1
     exam['status'] = 'uploading'
     exam['draft_questions'] = []
-    return {'id': eid, 'status': exam['status'], 'version': exam['version']}
+    for record in [item for item in QUESTION_RECORDS.values() if item['exam_id'] == eid and item['status'] == 'confirmed']:
+        record['status'] = 'superseded'
+        record['superseded_by_version'] = exam['version']
+        QUESTION_RECORDS[record['id']] = record
+    return {'id': eid, 'status': exam['status'], 'version': exam['version'], 'superseded_version': superseded_version}
 
 @app.post('/api/exams/{eid}/confirm')
 def confirm_exam(eid: str, body: ConfirmIn):
@@ -661,11 +666,14 @@ def map_question_knowledge(record_id: str):
         return JSONResponse({'error': 'knowledge_partition_not_found', 'requested': {'stage': missing.stage, 'subject': missing.subject, 'province': missing.province}, 'available_partitions': available_partitions()}, status_code=422)
     return {'record_id': record_id, 'knowledge_points': matches}
 
+def exam_versions(exam_ids: list[str]) -> list[dict]:
+    return [{'exam_id': eid, 'name': EXAMS[eid]['name'], 'version': EXAMS[eid].get('version', 1)} for eid in exam_ids]
+
 @app.post('/api/submissions/{sid}/analysis-runs', status_code=201)
 def create_run(sid: str, body: AnalysisIn):
     if sid not in SUBMISSIONS: return JSONResponse({'error':'submission_not_found'},status_code=404)
     if not body.exam_ids or any(e not in EXAMS or EXAMS[e]['submission_id']!=sid or EXAMS[e]['status']!='confirmed' for e in body.exam_ids): return JSONResponse({'error':'exams_not_confirmed'},status_code=422)
-    rid=str(uuid4()); RUNS[rid]={'id':rid,'submission_id':sid,'exam_ids':body.exam_ids,'status':'awaiting_confirmation'}; return RUNS[rid]
+    rid=str(uuid4()); RUNS[rid]={'id':rid,'submission_id':sid,'exam_ids':body.exam_ids,'status':'awaiting_confirmation','exam_versions':exam_versions(body.exam_ids)}; return RUNS[rid]
 
 @app.get('/api/submissions/{sid}/analysis-runs')
 def list_analysis_runs(sid: str):
@@ -717,6 +725,10 @@ def get_analysis_report(rid: str):
     partition = find_partition(submission['stage'], submission['subject'], submission['province'])
     if partition is None:
         return JSONResponse({'error': 'knowledge_partition_not_found', 'requested': {'stage': submission['stage'], 'subject': submission['subject'], 'province': submission['province']}, 'available_partitions': available_partitions()}, status_code=422)
+    selected = run.get('exam_versions') or exam_versions(run['exam_ids'])
+    current = exam_versions(run['exam_ids'])
+    if current != selected:
+        return JSONResponse({'error': 'exam_versions_changed', 'selected': selected, 'current': current}, status_code=409)
     records = [
         record for exam_id in run['exam_ids']
         for record in QUESTION_RECORDS.values()
@@ -744,6 +756,7 @@ def get_analysis_report(rid: str):
         'question_count': len(records), 'knowledge_coverage': list(coverage.values()),
         'unmapped_question_ids': unmapped, 'knowledge_base': partition.describe(),
         'scope_coverage': build_scope_coverage(partition, coverage),
+        'exam_versions': selected,
         'source_question_ids': [record['id'] for record in records],
     }
     report.update(diagnose_records(records))

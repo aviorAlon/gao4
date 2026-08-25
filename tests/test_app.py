@@ -14,7 +14,7 @@ def test_submission_survives_application_restart(tmp_path, monkeypatch):
     first = TestClient(app_module.app)
     created = first.post('/api/submissions', json={
         'stage': 'high', 'subject': '数学', 'province': '广东',
-        'school_grade': '高中二年级', 'academic_year_label': '25-26',
+        'school_grade': '高二', 'academic_year_label': '25-26',
     }).json()
     importlib.reload(app_module)
     second = TestClient(app_module.app)
@@ -25,7 +25,7 @@ def test_submission_survives_application_restart(tmp_path, monkeypatch):
 def test_create_submission_locks_single_subject_and_scope():
     response = client.post('/api/submissions', json={
         'stage': 'high', 'subject': '数学', 'province': '广东',
-        'school_grade': '高中二年级', 'academic_year_label': '25-26',
+        'school_grade': '高二', 'academic_year_label': '25-26',
         'is_repeating_student': False, 'target_exam_year': 2027,
     })
     assert response.status_code == 201
@@ -37,7 +37,7 @@ def test_create_submission_locks_single_subject_and_scope():
 def test_submission_rejects_eleventh_exam():
     submission = client.post('/api/submissions', json={
         'stage': 'high', 'subject': '数学', 'province': '广东',
-        'school_grade': '高中二年级', 'academic_year_label': '25-26',
+        'school_grade': '高二', 'academic_year_label': '25-26',
     }).json()
     for i in range(10):
         r = client.post(f"/api/submissions/{submission['id']}/exams", json={'name': f'考试{i+1}'})
@@ -48,7 +48,7 @@ def test_submission_rejects_eleventh_exam():
 def test_upload_and_confirm_requires_wrong_question_and_original_question():
     submission = client.post('/api/submissions', json={
         'stage': 'high', 'subject': '数学', 'province': '广东',
-        'school_grade': '高中二年级', 'academic_year_label': '25-26',
+        'school_grade': '高二', 'academic_year_label': '25-26',
     }).json()
     exam = client.post(f"/api/submissions/{submission['id']}/exams", json={'name': '月考'}).json()
     asset = client.post(f"/api/exams/{exam['id']}/assets", files={'file': ('paper.jpg', b'fake-image', 'image/jpeg')}).json()
@@ -59,7 +59,7 @@ def test_upload_and_confirm_requires_wrong_question_and_original_question():
 def test_confirm_and_start_analysis_creates_run():
     submission = client.post('/api/submissions', json={
         'stage': 'high', 'subject': '数学', 'province': '广东',
-        'school_grade': '高中二年级', 'academic_year_label': '25-26',
+        'school_grade': '高二', 'academic_year_label': '25-26',
     }).json()
     exam = client.post(f"/api/submissions/{submission['id']}/exams", json={'name': '月考'}).json()
     r = client.post(f"/api/exams/{exam['id']}/confirm", json={'questions': [{
@@ -78,7 +78,7 @@ def test_confirm_and_start_analysis_creates_run():
 def test_upload_strips_path_components_from_filename():
     submission = client.post('/api/submissions', json={
         'stage': 'high', 'subject': '数学', 'province': '广东',
-        'school_grade': '高中二年级', 'academic_year_label': '25-26',
+        'school_grade': '高二', 'academic_year_label': '25-26',
     }).json()
     exam = client.post(f"/api/submissions/{submission['id']}/exams", json={'name': '月考'}).json()
     response = client.post(f"/api/exams/{exam['id']}/assets", files={'file': ('../unsafe.jpg', b'fake', 'image/jpeg')})
@@ -89,7 +89,7 @@ def test_upload_strips_path_components_from_filename():
 def test_multiple_assets_are_grouped_in_an_upload_session_and_finished():
     submission = client.post('/api/submissions', json={
         'stage': 'high', 'subject': '数学', 'province': '广东',
-        'school_grade': '高中二年级', 'academic_year_label': '25-26',
+        'school_grade': '高二', 'academic_year_label': '25-26',
     }).json()
     exam = client.post(f"/api/submissions/{submission['id']}/exams", json={'name': '月考'}).json()
     session = client.post(f"/api/exams/{exam['id']}/upload-sessions").json()
@@ -109,7 +109,7 @@ def test_multiple_assets_are_grouped_in_an_upload_session_and_finished():
 def test_parse_draft_can_be_corrected_before_exam_confirmation():
     submission = client.post('/api/submissions', json={
         'stage': 'high', 'subject': '数学', 'province': '广东',
-        'school_grade': '高中二年级', 'academic_year_label': '25-26',
+        'school_grade': '高二', 'academic_year_label': '25-26',
     }).json()
     exam = client.post(f"/api/submissions/{submission['id']}/exams", json={'name': '月考'}).json()
     draft = client.get(f"/api/exams/{exam['id']}/parse-draft")
@@ -128,7 +128,7 @@ def test_parse_draft_can_be_corrected_before_exam_confirmation():
 def test_confirm_uses_corrected_parse_draft_when_questions_are_omitted():
     submission = client.post('/api/submissions', json={
         'stage': 'high', 'subject': '数学', 'province': '广东',
-        'school_grade': '高中二年级', 'academic_year_label': '25-26',
+        'school_grade': '高二', 'academic_year_label': '25-26',
     }).json()
     exam = client.post(f"/api/submissions/{submission['id']}/exams", json={'name': '月考'}).json()
     client.patch(f"/api/exams/{exam['id']}/parse-draft", json={'questions': [{
@@ -143,7 +143,7 @@ def test_confirm_uses_corrected_parse_draft_when_questions_are_omitted():
 def test_confirmed_exam_can_be_reopened_and_new_version_confirmed():
     submission = client.post('/api/submissions', json={
         'stage': 'high', 'subject': '数学', 'province': '广东',
-        'school_grade': '高中二年级', 'academic_year_label': '25-26',
+        'school_grade': '高二', 'academic_year_label': '25-26',
     }).json()
     exam = client.post(f"/api/submissions/{submission['id']}/exams", json={'name': '月考'}).json()
     first = {'question_number': '17', 'question_text': '原题',
@@ -165,7 +165,7 @@ def test_confirmed_exam_can_be_reopened_and_new_version_confirmed():
 def test_confirmed_exam_cannot_be_edited_without_reopen():
     submission = client.post('/api/submissions', json={
         'stage': 'high', 'subject': '数学', 'province': '广东',
-        'school_grade': '高中二年级', 'academic_year_label': '25-26',
+        'school_grade': '高二', 'academic_year_label': '25-26',
     }).json()
     exam = client.post(f"/api/submissions/{submission['id']}/exams", json={'name': '月考'}).json()
     question = {'question_number': '1', 'question_text': '原题',
@@ -178,7 +178,7 @@ def test_confirmed_exam_cannot_be_edited_without_reopen():
 def test_finish_upload_creates_parse_job_with_stages():
     submission = client.post('/api/submissions', json={
         'stage': 'high', 'subject': '数学', 'province': '广东',
-        'school_grade': '高中二年级', 'academic_year_label': '25-26',
+        'school_grade': '高二', 'academic_year_label': '25-26',
     }).json()
     exam = client.post(f"/api/submissions/{submission['id']}/exams", json={'name': '月考'}).json()
     session = client.post(f"/api/exams/{exam['id']}/upload-sessions").json()
@@ -200,7 +200,7 @@ def test_finish_upload_creates_parse_job_with_stages():
 def test_failed_job_can_be_retried_and_records_attempt():
     submission = client.post('/api/submissions', json={
         'stage': 'high', 'subject': '数学', 'province': '广东',
-        'school_grade': '高中二年级', 'academic_year_label': '25-26',
+        'school_grade': '高二', 'academic_year_label': '25-26',
     }).json()
     exam = client.post(f"/api/submissions/{submission['id']}/exams", json={'name': '月考'}).json()
     session = client.post(f"/api/exams/{exam['id']}/upload-sessions").json()
@@ -220,7 +220,7 @@ def test_failed_job_can_be_retried_and_records_attempt():
 def test_parse_job_run_advances_stages_and_creates_parse_draft():
     submission = client.post('/api/submissions', json={
         'stage': 'high', 'subject': '数学', 'province': '广东',
-        'school_grade': '高中二年级', 'academic_year_label': '25-26',
+        'school_grade': '高二', 'academic_year_label': '25-26',
     }).json()
     exam = client.post(f"/api/submissions/{submission['id']}/exams", json={'name': '月考'}).json()
     session = client.post(f"/api/exams/{exam['id']}/upload-sessions").json()
@@ -240,7 +240,7 @@ def test_parse_job_run_advances_stages_and_creates_parse_draft():
 def test_parse_job_run_rejects_a_job_that_is_not_queued():
     submission = client.post('/api/submissions', json={
         'stage': 'high', 'subject': '数学', 'province': '广东',
-        'school_grade': '高中二年级', 'academic_year_label': '25-26',
+        'school_grade': '高二', 'academic_year_label': '25-26',
     }).json()
     exam = client.post(f"/api/submissions/{submission['id']}/exams", json={'name': '月考'}).json()
     session = client.post(f"/api/exams/{exam['id']}/upload-sessions").json()
@@ -254,7 +254,7 @@ def test_parse_job_run_rejects_a_job_that_is_not_queued():
 def test_parse_job_records_page_results_and_classifies_materials():
     submission = client.post('/api/submissions', json={
         'stage': 'high', 'subject': '数学', 'province': '广东',
-        'school_grade': '高中二年级', 'academic_year_label': '25-26',
+        'school_grade': '高二', 'academic_year_label': '25-26',
     }).json()
     exam = client.post(f"/api/submissions/{submission['id']}/exams", json={'name': '月考'}).json()
     session = client.post(f"/api/exams/{exam['id']}/upload-sessions").json()
@@ -279,7 +279,7 @@ def test_parse_job_records_page_results_and_classifies_materials():
 def test_filename_classification_marks_unknown_material_for_confirmation():
     submission = client.post('/api/submissions', json={
         'stage': 'high', 'subject': '数学', 'province': '广东',
-        'school_grade': '高中二年级', 'academic_year_label': '25-26',
+        'school_grade': '高二', 'academic_year_label': '25-26',
     }).json()
     exam = client.post(f"/api/submissions/{submission['id']}/exams", json={'name': '月考'}).json()
     session = client.post(f"/api/exams/{exam['id']}/upload-sessions").json()
@@ -298,7 +298,7 @@ def test_filename_classification_marks_unknown_material_for_confirmation():
 def test_auto_parse_draft_is_confirmable_after_job_run():
     submission = client.post('/api/submissions', json={
         'stage': 'high', 'subject': '数学', 'province': '广东',
-        'school_grade': '高中二年级', 'academic_year_label': '25-26',
+        'school_grade': '高二', 'academic_year_label': '25-26',
     }).json()
     exam = client.post(f"/api/submissions/{submission['id']}/exams", json={'name': '月考'}).json()
     session = client.post(f"/api/exams/{exam['id']}/upload-sessions").json()
@@ -320,7 +320,7 @@ def test_auto_parse_draft_is_confirmable_after_job_run():
 def test_parse_draft_field_edit_preserves_machine_value_and_records_user_value():
     submission = client.post('/api/submissions', json={
         'stage': 'high', 'subject': '数学', 'province': '广东',
-        'school_grade': '高中二年级', 'academic_year_label': '25-26',
+        'school_grade': '高二', 'academic_year_label': '25-26',
     }).json()
     exam = client.post(f"/api/submissions/{submission['id']}/exams", json={'name': '月考'}).json()
     client.patch(f"/api/exams/{exam['id']}/parse-draft", json={'questions': [{
@@ -342,7 +342,7 @@ def test_parse_draft_field_edit_preserves_machine_value_and_records_user_value()
 def test_parse_draft_field_edit_rejects_confirmed_exam():
     submission = client.post('/api/submissions', json={
         'stage': 'high', 'subject': '数学', 'province': '广东',
-        'school_grade': '高中二年级', 'academic_year_label': '25-26',
+        'school_grade': '高二', 'academic_year_label': '25-26',
     }).json()
     exam = client.post(f"/api/submissions/{submission['id']}/exams", json={'name': '月考'}).json()
     question = {'question_number': '1', 'question_text': '原题',
@@ -358,7 +358,7 @@ def test_parse_draft_field_edit_rejects_confirmed_exam():
 def test_wrong_question_can_link_to_original_asset_and_confirmation_reports_completeness():
     submission = client.post('/api/submissions', json={
         'stage': 'high', 'subject': '数学', 'province': '广东',
-        'school_grade': '高中二年级', 'academic_year_label': '25-26',
+        'school_grade': '高二', 'academic_year_label': '25-26',
     }).json()
     exam = client.post(f"/api/submissions/{submission['id']}/exams", json={'name': '月考'}).json()
     session = client.post(f"/api/exams/{exam['id']}/upload-sessions").json()
@@ -386,7 +386,7 @@ def test_wrong_question_can_link_to_original_asset_and_confirmation_reports_comp
 def test_confirm_rejects_wrong_question_without_original_source_link():
     submission = client.post('/api/submissions', json={
         'stage': 'high', 'subject': '数学', 'province': '广东',
-        'school_grade': '高中二年级', 'academic_year_label': '25-26',
+        'school_grade': '高二', 'academic_year_label': '25-26',
     }).json()
     exam = client.post(f"/api/submissions/{submission['id']}/exams", json={'name': '月考'}).json()
     client.patch(f"/api/exams/{exam['id']}/parse-draft", json={'questions': [{
@@ -401,7 +401,7 @@ def test_confirm_rejects_wrong_question_without_original_source_link():
 def test_confirmed_exam_persists_question_records_and_links_original_asset():
     submission = client.post('/api/submissions', json={
         'stage': 'high', 'subject': '数学', 'province': '广东',
-        'school_grade': '高中二年级', 'academic_year_label': '25-26',
+        'school_grade': '高二', 'academic_year_label': '25-26',
     }).json()
     exam = client.post(f"/api/submissions/{submission['id']}/exams", json={'name': '月考'}).json()
     session = client.post(f"/api/exams/{exam['id']}/upload-sessions").json()
@@ -425,7 +425,7 @@ def test_confirmed_exam_persists_question_records_and_links_original_asset():
 def test_question_record_can_store_score_and_teacher_correction():
     submission = client.post('/api/submissions', json={
         'stage': 'high', 'subject': '数学', 'province': '广东',
-        'school_grade': '高中二年级', 'academic_year_label': '25-26',
+        'school_grade': '高二', 'academic_year_label': '25-26',
     }).json()
     exam = client.post(f"/api/submissions/{submission['id']}/exams", json={'name': '月考'}).json()
     question = {'question_number': '1', 'question_text': '原题', 'is_wrong_question': True,
@@ -443,7 +443,7 @@ def test_question_record_can_store_score_and_teacher_correction():
 def test_question_record_can_be_mapped_to_public_knowledge_points():
     submission = client.post('/api/submissions', json={
         'stage': 'high', 'subject': '数学', 'province': '广东',
-        'school_grade': '高中二年级', 'academic_year_label': '25-26',
+        'school_grade': '高二', 'academic_year_label': '25-26',
     }).json()
     exam = client.post(f"/api/submissions/{submission['id']}/exams", json={'name': '月考'}).json()
     question = {'question_number': '1', 'question_text': '函数定义域与单调性',
@@ -462,7 +462,7 @@ def test_question_record_can_be_mapped_to_public_knowledge_points():
 def test_analysis_run_generates_minimal_report_with_coverage_and_wrong_questions():
     submission = client.post('/api/submissions', json={
         'stage': 'high', 'subject': '数学', 'province': '广东',
-        'school_grade': '高中二年级', 'academic_year_label': '25-26',
+        'school_grade': '高二', 'academic_year_label': '25-26',
     }).json()
     exam = client.post(f"/api/submissions/{submission['id']}/exams", json={'name': '月考'}).json()
     question = {'question_number': '1', 'question_text': '函数定义域',
@@ -484,7 +484,7 @@ def test_analysis_run_generates_minimal_report_with_coverage_and_wrong_questions
 def test_analysis_run_report_marks_missing_knowledge_mapping():
     submission = client.post('/api/submissions', json={
         'stage': 'high', 'subject': '数学', 'province': '广东',
-        'school_grade': '高中二年级', 'academic_year_label': '25-26',
+        'school_grade': '高二', 'academic_year_label': '25-26',
     }).json()
     exam = client.post(f"/api/submissions/{submission['id']}/exams", json={'name': '月考'}).json()
     question = {'question_number': '1', 'question_text': '未知题目',
