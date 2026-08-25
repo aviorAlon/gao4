@@ -456,6 +456,11 @@ def run_job(job_id: str):
             stage['result'] = {'material_counts': counts}
         elif stage['name'] == 'ocr':
             parsed_pages = []
+            user_decisions = {}
+            for stale in pages_for_exam(job['exam_id']):
+                if stale.get('inclusion_decided_by') == 'user':
+                    user_decisions[stale['asset_id']] = (stale['include_in_analysis'], stale['exclusion_reason'])
+                del PAGES[stale['id']]
             for asset in assets_for_exam(job['exam_id']):
                 content = Path(asset['storage_path']).read_bytes()
                 if asset.get('media_type', '') == 'application/pdf' or asset['filename'].lower().endswith('.pdf'):
@@ -472,6 +477,9 @@ def run_job(job_id: str):
                 page['include_in_analysis'] = not page['subject_mismatch']
                 page['exclusion_reason'] = 'subject_mismatch' if page['subject_mismatch'] else ''
                 page['inclusion_decided_by'] = 'machine'
+                if asset['id'] in user_decisions:
+                    page['include_in_analysis'], page['exclusion_reason'] = user_decisions[asset['id']]
+                    page['inclusion_decided_by'] = 'user'
                 PAGES[page['id']] = page
                 asset['ocr_status'] = result.ocr_status
                 parsed_pages.append(page)
@@ -515,23 +523,25 @@ def rebuild_draft_questions(exam_id: str) -> dict:
     exam = EXAMS[exam_id]
     kept = [page for page in pages_for_exam(exam_id) if page.get('include_in_analysis', True)]
     excluded = [page for page in pages_for_exam(exam_id) if not page.get('include_in_analysis', True)]
-    def draft_key(question, page_id):
-        return (page_id, str(question.get('question_number', '')))
+    def draft_key(question, asset_id):
+        return (asset_id, str(question.get('question_number', '')))
 
-    known_pages = {page['id'] for page in pages_for_exam(exam_id)}
-    previous = {draft_key(item, (item.get('original_source') or {}).get('page_id')): item for item in exam.get('draft_questions', [])}
-    manual = [item for item in exam.get('draft_questions', []) if (item.get('original_source') or {}).get('page_id') not in known_pages]
-    exam['draft_questions'] = [
-        previous.get(draft_key(question, page['id'])) or {
-            **question, 'original_source': {'asset_id': page['asset_id'], 'page_id': page['id'], 'filename': page['filename']},
-            'id': question.get('id', str(uuid4())),
-            'confirmation_status': 'draft',
-            'is_wrong_question': question.get('is_wrong_question', True),
-            'original_question_available': question.get('original_question_available', True),
-        }
-        for page in kept
-        for question in page['questions']
-    ] + manual
+    known_assets = {asset['id'] for asset in assets_for_exam(exam_id)}
+    previous = {draft_key(item, (item.get('original_source') or {}).get('asset_id')): item for item in exam.get('draft_questions', [])}
+    manual = [item for item in exam.get('draft_questions', []) if (item.get('original_source') or {}).get('asset_id') not in known_assets]
+    rebuilt = []
+    for page in kept:
+        source = {'asset_id': page['asset_id'], 'page_id': page['id'], 'filename': page['filename']}
+        for question in page['questions']:
+            kept_draft = previous.get(draft_key(question, page['asset_id']))
+            rebuilt.append({**kept_draft, 'original_source': source} if kept_draft else {
+                **question, 'original_source': source,
+                'id': question.get('id', str(uuid4())),
+                'confirmation_status': 'draft',
+                'is_wrong_question': question.get('is_wrong_question', True),
+                'original_question_available': question.get('original_question_available', True),
+            })
+    exam['draft_questions'] = rebuilt + manual
     exam['excluded_pages'] = [
         {'page_id': page['id'], 'filename': page.get('filename', ''), 'subject': page.get('subject', ''), 'reason': page.get('exclusion_reason', ''), 'decided_by': page.get('inclusion_decided_by', 'machine'), 'questions_excluded': len(page['questions'])}
         for page in excluded
