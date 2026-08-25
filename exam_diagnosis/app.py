@@ -74,10 +74,12 @@ def home():
     <section><h2>已有任务</h2><button id="refresh-submissions">刷新任务列表</button><button id="export-submission">导出个人数据</button><button id="delete-submission">删除任务</button><div id="submission-list"></div></section>
     <section id="exam-section" hidden><h2>考试资料</h2><form id="exam-form"><input name="name" value="月考"><button>创建考试</button></form><div id="exam-list"></div>
     <div id="upload-area" hidden><input id="asset-file" class="multiple" type="file" multiple><button id="upload-button">上传全部文件</button><progress id="upload-progress" max="100" value="0"></progress><span id="upload-error"></span><button id="run-button">运行解析</button><button id="retry-run" hidden>重试解析</button><span id="job-progress"></span></div></section>
-    <section id="draft-section" hidden><h2>解析确认</h2><div id="draft"></div><button id="manual-question" type="button">手工新增题目</button><button id="save-draft">保存编辑</button><button id="confirm-exam">确认本次考试</button></section>
+    <section id="draft-section" hidden><h2>解析确认</h2><h3>页面与材料</h3><div id="page-list"></div><p id="excluded-pages"></p>
+    <h3>题目草稿</h3><div id="draft"></div><button id="manual-question" type="button">手工新增题目</button><button id="save-draft">保存编辑</button><button id="confirm-exam">确认本次考试</button>
+    <h3>得分与批改</h3><div id="record-list"></div></section>
     <section id="analysis-section" hidden><h2>分析与报告</h2><div id="analysis-history"></div><button id="start-analysis">确认并开始分析</button><button id="load-report">查看报告</button><pre id="report"></pre><div id="export-links"><a id="export-md">导出 Markdown</a> <a id="export-html">导出 HTML</a></div><div id="verification-list"></div><div id="mastery-status"></div></section></main>
     <script>
-    let submission, exam, session, job, run, partitions=[];
+    let submission, exam, session, job, run, partitions=[], pageIndex={};
     const status = m => document.querySelector('#status').textContent=m;
     const api = (url, opts={}) => fetch(url, opts).then(r => r.json().then(x => {if(!r.ok) throw Error(x.error||r.status); return x;}));
     const showSubmissions = async () => {const items=await api('/api/submissions'); document.querySelector('#submission-list').innerHTML=items.map(x=>`<button data-submission="${x.id}">${x.stage}/${x.subject}/${x.academic_year_label}（${x.exam_count}/10）</button>`).join(''); document.querySelectorAll('[data-submission]').forEach(b=>b.onclick=async()=>{submission=await api('/api/submissions/'+b.dataset.submission); document.querySelector('#exam-section').hidden=false; await showExams();});};
@@ -88,12 +90,20 @@ def home():
     document.querySelector('#export-submission').onclick=()=>{if(submission) location.href=`/api/submissions/${submission.id}/export`;}; document.querySelector('#delete-submission').onclick=async()=>{if(submission){await api(`/api/submissions/${submission.id}`,{method:'DELETE'}); submission=null; await showSubmissions();}};
     document.querySelector('#exam-form').onsubmit = async e => {e.preventDefault(); exam=await api(`/api/submissions/${submission.id}/exams`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.fromEntries(new FormData(e.target)))}); session=await api(`/api/exams/${exam.id}/upload-sessions`,{method:'POST'}); document.querySelector('#upload-area').hidden=false;};
     document.querySelector('#upload-button').onclick = async () => {const files=[...document.querySelector('#asset-file').files]; if(!files.length)return status('请选择文件'); document.querySelector('#upload-error').textContent=''; for(let i=0;i<files.length;i++){const data=new FormData(); data.append('file',files[i]); try{await api(`/api/upload-sessions/${session.id}/assets`,{method:'POST',body:data}); document.querySelector('#upload-progress').value=((i+1)/files.length)*100;}catch(err){document.querySelector('#upload-error').textContent='上传失败：'+err.message;}} status('上传处理完成');};
-    const runParsing = async () => {if(!job) job=(await api(`/api/upload-sessions/${session.id}/finish`,{method:'POST'})).job_id; try {const result=await api(`/api/jobs/${job}/run`,{method:'POST'}); document.querySelector('#job-progress').textContent=result.stages.map(x=>x.name+':'+x.status).join(' | '); document.querySelector('#retry-run').hidden=true;} catch(err) {status('解析失败：'+err.message); document.querySelector('#retry-run').hidden=false; document.querySelector('#draft-section').hidden=false; document.querySelector('#draft').innerHTML=''; return;} const draft=await api(`/api/exams/${exam.id}/parse-draft`); const pages=await api(`/api/exams/${exam.id}/pages`); document.querySelector('#draft').innerHTML=draft.questions.map((q,i)=>`<div class="question" data-source='${JSON.stringify(q.original_source||null)}'><input data-number value="${q.question_number||''}"><label><input type="checkbox" data-wrong="${i}" ${q.is_wrong_question?'checked':''}>错题</label><input data-i="${i}" value="${q.question_text||''}"><input data-answer="${i}" placeholder="学生答案" value="${q.student_answer||''}"><span class="original-source">原题来源：${q.original_source?'已关联':'缺失'}</span><small>解析状态：${pages.pages[i]?.ocr_status||'unknown'}；置信度：${pages.pages[i]?.ocr_confidence||0}；${pages.pages[i]?.subject_mismatch?'科目不匹配':''}</small></div>`).join(''); document.querySelector('#draft-section').hidden=false;};
+    const MATERIAL_TYPES=['paper','answer_key','student_answer','correction','unknown'];
+    const showPages = async () => {const data=await api(`/api/exams/${exam.id}/pages`); pageIndex=Object.fromEntries(data.pages.map(p=>[p.id,p]));
+      document.querySelector('#page-list').innerHTML=data.pages.map(p=>`<div class="page" data-page="${p.id}">第 <input class="page-order" type="number" min="1" value="${p.page_order||1}"> 页 <select class="material-type">${MATERIAL_TYPES.map(t=>`<option value="${t}" ${p.material_type===t?'selected':''}>${t}</option>`).join('')}</select> <label><input type="checkbox" class="page-include" ${p.include_in_analysis?'checked':''}>计入解析统计</label> <button class="save-page" type="button">保存页面</button> <small>解析状态：${p.ocr_status}；置信度：${p.ocr_confidence}${p.subject_mismatch?`；识别为「${p.subject||'未知'}」与本任务科目不符`:''}${p.include_in_analysis?'':`；已排除（${p.exclusion_reason}，由${p.inclusion_decided_by==='user'?'用户':'系统'}判定）`}</small></div>`).join('');
+      document.querySelectorAll('.save-page').forEach(b=>b.onclick=async()=>{const box=b.closest('[data-page]'); try{await api(`/api/pages/${box.dataset.page}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({page_order:Number(box.querySelector('.page-order').value),material_type:box.querySelector('.material-type').value,include_in_analysis:box.querySelector('.page-include').checked})});}catch(err){return status('页面保存失败：'+err.message);} await showPages(); await showDraft(); status('页面已更新，题目草稿已重算');});
+      document.querySelector('#excluded-pages').textContent=data.excluded_pages.length?`已排除 ${data.excluded_pages.length} 页，共 ${data.excluded_pages.reduce((n,x)=>n+x.questions_excluded,0)} 道题不计入解析统计：${data.excluded_pages.map(x=>`${x.filename}（${x.reason}）`).join('、')}`:'所有页面都计入解析统计';};
+    const showDraft = async () => {const draft=await api(`/api/exams/${exam.id}/parse-draft`); document.querySelector('#draft').innerHTML=draft.questions.map((q,i)=>{const page=pageIndex[(q.original_source||{}).page_id]||{}; return `<div class="question" data-source='${JSON.stringify(q.original_source||null)}'><input data-number value="${q.question_number||''}"><label><input type="checkbox" data-wrong="${i}" ${q.is_wrong_question?'checked':''}>错题</label><input data-i="${i}" value="${q.question_text||''}"><input data-answer="${i}" placeholder="学生答案" value="${q.student_answer||''}"><span class="original-source">原题来源：${q.original_source?'已关联':'缺失'}</span><small>解析状态：${page.ocr_status||'unknown'}；置信度：${page.ocr_confidence||0}</small></div>`;}).join(''); document.querySelector('#draft-section').hidden=false;};
+    const showRecords = async () => {const data=await api(`/api/exams/${exam.id}/question-records`); document.querySelector('#record-list').innerHTML=data.records.map(r=>`<div class="record" data-record="${r.id}">${r.question_number} 得分 <input class="score-obtained" type="number" step="0.5" value="${r.score.obtained??''}"> / <input class="score-total" type="number" step="0.5" value="${r.score.total??''}"> 失分 <span class="lost-points">${r.score.lost_points??'-'}</span> <input class="teacher-comment" placeholder="教师批注" value="${r.correction?.teacher_comment||''}"> <button class="save-record" type="button">保存得分</button></div>`).join('');
+      document.querySelectorAll('.save-record').forEach(b=>b.onclick=async()=>{const box=b.closest('[data-record]'); const payload={teacher_comment:box.querySelector('.teacher-comment').value}; const got=box.querySelector('.score-obtained').value, total=box.querySelector('.score-total').value; if(got!=='')payload.score_obtained=Number(got); if(total!=='')payload.score_total=Number(total); try{await api(`/api/question-records/${box.dataset.record}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});}catch(err){return status('得分保存失败：'+err.message);} await showRecords(); status('得分已保存');});};
+    const runParsing = async () => {if(!job) job=(await api(`/api/upload-sessions/${session.id}/finish`,{method:'POST'})).job_id; try {const result=await api(`/api/jobs/${job}/run`,{method:'POST'}); document.querySelector('#job-progress').textContent=result.stages.map(x=>x.name+':'+x.status).join(' | '); document.querySelector('#retry-run').hidden=true;} catch(err) {status('解析失败：'+err.message); document.querySelector('#retry-run').hidden=false; document.querySelector('#draft-section').hidden=false; document.querySelector('#draft').innerHTML=''; return;} await showPages(); await showDraft();};
     document.querySelector('#run-button').onclick = runParsing; document.querySelector('#retry-run').onclick=runParsing;
     document.querySelector('#save-draft').onclick = async () => {const questions=[...document.querySelectorAll('#draft .question')].map((box,i)=>{const source=box.dataset.source?JSON.parse(box.dataset.source):null; const selected=box.querySelector('[data-source-asset]'); if(selected && selected.value) source={asset_id:selected.value}; return {question_number:box.querySelector('[data-number]').value,question_text:box.querySelector('[data-i]').value,is_wrong_question:box.querySelector('[data-wrong]').checked,original_question_available:!!source,original_source:source,student_answer:box.querySelector('[data-answer]').value};}); await api(`/api/exams/${exam.id}/parse-draft`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({questions})}); status('草稿已保存');};
     document.querySelector('#manual-question').onclick=()=>{document.querySelector('#draft').insertAdjacentHTML('beforeend','<div class="question"><input data-number value="手工"><label><input type="checkbox" data-wrong checked>错题</label><input data-i placeholder="题干"><input data-answer placeholder="学生答案"><label>原题来源资产<select data-source-asset></select></label><span class="original-source">原题来源：待关联上传原图</span></div>'); loadAssets();};
     const loadAssets = async () => {const assets=await api(`/api/exams/${exam.id}/pages`); document.querySelectorAll('[data-source-asset]').forEach(select=>{select.innerHTML=assets.pages.map(p=>`<option value="${p.asset_id}" data-page-id="${p.id}" data-filename="${p.asset_id}">${p.page_order} ${p.material_type}</option>`).join(''); select.onchange=()=>{const option=select.selectedOptions[0]; const box=select.closest('.question'); box.dataset.source=JSON.stringify({asset_id:option.value,page_id:option.dataset.pageId,filename:option.dataset.filename}); box.querySelector('.original-source').textContent='原题来源：已选择页面 '+option.value;};});};
-    document.querySelector('#confirm-exam').onclick = async () => {await document.querySelector('#save-draft').onclick(); await api(`/api/exams/${exam.id}/confirm`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({questions:[]})}); document.querySelector('#analysis-section').hidden=false; status('考试已确认');};
+    document.querySelector('#confirm-exam').onclick = async () => {await document.querySelector('#save-draft').onclick(); await api(`/api/exams/${exam.id}/confirm`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({questions:[]})}); document.querySelector('#analysis-section').hidden=false; await showRecords(); status('考试已确认');};
     const loadAnalysisHistory=async()=>{const h=await api(`/api/submissions/${submission.id}/analysis-runs`); document.querySelector('#analysis-history').innerHTML=h.runs.map(x=>`<button data-run="${x.id}">${x.id} ${x.status}</button>`).join(''); document.querySelectorAll('[data-run]').forEach(b=>b.onclick=()=>{run={id:b.dataset.run}; document.querySelector('#load-report').click();});};
     document.querySelector('#start-analysis').onclick = async () => {const selected=[...document.querySelectorAll('[data-analysis-exam]:checked')].map(x=>x.value); run=await api(`/api/submissions/${submission.id}/analysis-runs`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({exam_ids:selected.length?selected:[exam.id]})}); await api(`/api/analysis-runs/${run.id}/confirm-start`,{method:'POST'}); status('分析已开始'); await loadAnalysisHistory();};
     const loadMastery=async()=>{const m=await api(`/api/submissions/${submission.id}/mastery-records`); document.querySelector('#mastery-status').textContent=m.records.map(x=>x.knowledge_id+': '+x.status).join(' | ');};
@@ -154,6 +164,7 @@ class QuestionRecordEditIn(BaseModel):
 class PageEditIn(BaseModel):
     page_order: int | None = None
     material_type: str | None = None
+    include_in_analysis: bool | None = None
 
 class AssetEditIn(BaseModel):
     page_order: int | None = None
@@ -425,23 +436,15 @@ def run_job(job_id: str):
                 submission = SUBMISSIONS[exam['submission_id']]
                 result.subject_mismatch = bool(result.subject and result.subject != submission['subject'])
                 page = {'id': str(uuid4()), 'asset_id': asset['id'], 'exam_id': job['exam_id'], **result.to_dict()}
+                page['include_in_analysis'] = not page['subject_mismatch']
+                page['exclusion_reason'] = 'subject_mismatch' if page['subject_mismatch'] else ''
+                page['inclusion_decided_by'] = 'machine'
                 PAGES[page['id']] = page
                 asset['ocr_status'] = result.ocr_status
                 parsed_pages.append(page)
             stage['result'] = {'pages_processed': len(parsed_pages), 'page_ids': [page['id'] for page in parsed_pages]}
         elif stage['name'] == 'question_split':
-            exam['draft_questions'] = [
-                {
-                    **question, 'original_source': {'asset_id': page['asset_id'], 'page_id': page['id'], 'filename': page['filename']},
-                    'id': question.get('id', str(uuid4())),
-                    'confirmation_status': 'draft',
-                    'is_wrong_question': question.get('is_wrong_question', True),
-                    'original_question_available': question.get('original_question_available', True),
-                }
-                for page in pages_for_exam(job['exam_id'])
-                for question in page['questions']
-            ]
-            stage['result'] = {'questions_detected': len(exam['draft_questions'])}
+            stage['result'] = rebuild_draft_questions(job['exam_id'])
         stage['status'] = 'completed'
       job['status'] = 'completed'
       exam = EXAMS[job['exam_id']]
@@ -474,6 +477,35 @@ def assets_for_exam(exam_id: str):
 def pages_for_exam(exam_id: str):
     return [page for page in PAGES.values() if page['exam_id'] == exam_id]
 
+def rebuild_draft_questions(exam_id: str) -> dict:
+    """Pages the user or the parser ruled out stay visible but never reach the draft."""
+    exam = EXAMS[exam_id]
+    kept = [page for page in pages_for_exam(exam_id) if page.get('include_in_analysis', True)]
+    excluded = [page for page in pages_for_exam(exam_id) if not page.get('include_in_analysis', True)]
+    def draft_key(question, page_id):
+        return (page_id, str(question.get('question_number', '')))
+
+    known_pages = {page['id'] for page in pages_for_exam(exam_id)}
+    previous = {draft_key(item, (item.get('original_source') or {}).get('page_id')): item for item in exam.get('draft_questions', [])}
+    manual = [item for item in exam.get('draft_questions', []) if (item.get('original_source') or {}).get('page_id') not in known_pages]
+    exam['draft_questions'] = [
+        previous.get(draft_key(question, page['id'])) or {
+            **question, 'original_source': {'asset_id': page['asset_id'], 'page_id': page['id'], 'filename': page['filename']},
+            'id': question.get('id', str(uuid4())),
+            'confirmation_status': 'draft',
+            'is_wrong_question': question.get('is_wrong_question', True),
+            'original_question_available': question.get('original_question_available', True),
+        }
+        for page in kept
+        for question in page['questions']
+    ] + manual
+    exam['excluded_pages'] = [
+        {'page_id': page['id'], 'filename': page.get('filename', ''), 'subject': page.get('subject', ''), 'reason': page.get('exclusion_reason', ''), 'decided_by': page.get('inclusion_decided_by', 'machine'), 'questions_excluded': len(page['questions'])}
+        for page in excluded
+    ]
+    EXAMS[exam_id] = exam
+    return {'questions_detected': len(exam['draft_questions']), 'pages_excluded': len(excluded), 'questions_excluded': sum(item['questions_excluded'] for item in exam['excluded_pages'])}
+
 @app.get('/api/exams/{eid}/pages')
 def list_exam_pages(eid: str):
     if eid not in EXAMS:
@@ -489,9 +521,12 @@ def list_exam_pages(eid: str):
             'ocr_confidence': page.get('ocr_confidence', 0),
             'ocr_status': page.get('ocr_status', 'manual_confirmation_required'),
             'subject_mismatch': page.get('subject_mismatch', False),
+            'include_in_analysis': page.get('include_in_analysis', True),
+            'exclusion_reason': page.get('exclusion_reason', ''),
+            'inclusion_decided_by': page.get('inclusion_decided_by', 'machine'),
             'review_required': page.get('review_required', True),
         })
-    return {'exam_id': eid, 'pages': pages}
+    return {'exam_id': eid, 'pages': pages, 'excluded_pages': EXAMS[eid].get('excluded_pages', [])}
 
 @app.patch('/api/pages/{page_id}')
 def update_page(page_id: str, body: PageEditIn):
@@ -503,7 +538,12 @@ def update_page(page_id: str, body: PageEditIn):
         return JSONResponse({'error': 'invalid_page_order'}, status_code=422)
     if 'material_type' in changes and changes['material_type'] not in {'paper','answer_key','student_answer','correction','unknown'}:
         return JSONResponse({'error': 'invalid_material_type'}, status_code=422)
+    if 'include_in_analysis' in changes:
+        changes['inclusion_decided_by'] = 'user'
+        changes['exclusion_reason'] = '' if changes['include_in_analysis'] else 'user_excluded'
     page.update(changes); PAGES[page_id] = page
+    if 'include_in_analysis' in changes:
+        return {**page, 'draft_rebuild': rebuild_draft_questions(page['exam_id'])}
     return page
 
 @app.get('/api/exams/{eid}')
@@ -640,6 +680,7 @@ def confirm_exam(eid: str, body: ConfirmIn):
         'has_corrections': 'correction' in material_types,
     }
     completeness['missing'] = sorted(key for key, present in completeness.items() if not present)
+    completeness['excluded_pages'] = exam.get('excluded_pages', [])
     exam['completeness'] = completeness
     records = []
     for item in confirmed_questions:
