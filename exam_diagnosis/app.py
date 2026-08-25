@@ -679,6 +679,31 @@ def confirm_start(rid: str):
     if not run: return JSONResponse({'error':'run_not_found'},status_code=404)
     run['status']='queued'; return run
 
+SCOPE_COVERAGE_NOTE = '未考查表示本次资料没有覆盖该知识点，不能据此判定未掌握。'
+
+def build_scope_coverage(partition, coverage: dict):
+    """Contrast the curriculum scope of the knowledge partition with what the uploaded exams actually assessed."""
+    points = []
+    for point in partition.points:
+        assessed = coverage.get(point['knowledge_id'])
+        points.append({
+            'knowledge_id': point['knowledge_id'], 'name': point['name'], 'chapter': point['chapter'],
+            'grade_scope': point['grade_scope'], 'textbook_chapter': point['textbook_chapter'],
+            'status': 'not_assessed' if not assessed else ('assessed_with_errors' if assessed['wrong_count'] else 'assessed_without_errors'),
+            'question_count': assessed['question_count'] if assessed else 0,
+            'wrong_count': assessed['wrong_count'] if assessed else 0,
+        })
+    not_assessed = [item for item in points if item['status'] == 'not_assessed']
+    return {
+        'curriculum_point_count': len(points),
+        'assessed_point_count': len(points) - len(not_assessed),
+        'not_assessed_point_count': len(not_assessed),
+        'coverage_ratio': round((len(points) - len(not_assessed)) / len(points), 4) if points else 0.0,
+        'not_assessed_knowledge_ids': [item['knowledge_id'] for item in not_assessed],
+        'not_assessed_chapters': sorted({item['chapter'] for item in not_assessed}),
+        'note': SCOPE_COVERAGE_NOTE, 'points': points,
+    }
+
 @app.get('/api/analysis-runs/{rid}/report')
 def get_analysis_report(rid: str):
     run = RUNS.get(rid)
@@ -718,6 +743,7 @@ def get_analysis_report(rid: str):
         'wrong_question_count': sum(record['is_wrong_question'] for record in records),
         'question_count': len(records), 'knowledge_coverage': list(coverage.values()),
         'unmapped_question_ids': unmapped, 'knowledge_base': partition.describe(),
+        'scope_coverage': build_scope_coverage(partition, coverage),
         'source_question_ids': [record['id'] for record in records],
     }
     report.update(diagnose_records(records))

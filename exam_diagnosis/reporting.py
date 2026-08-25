@@ -7,7 +7,19 @@ def text(value: Any) -> str:
 
 
 def render_markdown(report: dict[str, Any]) -> str:
-    lines = ['# Exam Diagnosis 报告', '', f"- 错题数：{report.get('wrong_question_count', 0)}", '', '## 错因专题']
+    lines = ['# Exam Diagnosis 报告', '', f"- 错题数：{report.get('wrong_question_count', 0)}", '']
+    scope = report.get('scope_coverage')
+    if scope:
+        lines.extend([
+            '## 课程范围与资料覆盖范围',
+            f"- 课程范围知识点：{scope.get('curriculum_point_count', 0)}",
+            f"- 本次资料考查到：{scope.get('assessed_point_count', 0)}（覆盖率 {scope.get('coverage_ratio', 0)}）",
+            f"- 本次资料未考查：{scope.get('not_assessed_point_count', 0)}",
+            f"- 未考查章节：{'、'.join(scope.get('not_assessed_chapters', [])) or '无'}",
+            f"- {scope.get('note', '')}",
+            '',
+        ])
+    lines.append('## 错因专题')
     for cluster in report.get('clusters', []):
         lines.append(f"- {cluster.get('root_cause', '待人工确认')}（优先级 {cluster.get('priority', 0)}）：来源题目 {', '.join(cluster.get('question_ids', []))}；规避建议：{cluster.get('avoidance_advice', '')}")
         for evidence in cluster.get('evidence', []):
@@ -29,7 +41,17 @@ def render_markdown(report: dict[str, Any]) -> str:
 
 
 def render_html(report: dict[str, Any]) -> str:
-    lines = [f'<h1>{escape("Exam Diagnosis 报告")}</h1>', f'<p>错题数：{report.get("wrong_question_count", 0)}</p>', '<section><h2>错因专题</h2><ul>']
+    lines = [f'<h1>{escape("Exam Diagnosis 报告")}</h1>', f'<p>错题数：{report.get("wrong_question_count", 0)}</p>']
+    scope = report.get('scope_coverage')
+    if scope:
+        lines.append('<section><h2>课程范围与资料覆盖范围</h2><ul>')
+        lines.append(f'<li>课程范围知识点：{scope.get("curriculum_point_count", 0)}</li>')
+        lines.append(f'<li>本次资料考查到：{scope.get("assessed_point_count", 0)}（覆盖率 {scope.get("coverage_ratio", 0)}）</li>')
+        lines.append(f'<li>本次资料未考查：{scope.get("not_assessed_point_count", 0)}</li>')
+        lines.append(f'<li>未考查章节：{escape("、".join(scope.get("not_assessed_chapters", [])) or "无")}</li>')
+        lines.append(f'<li>{escape(text(scope.get("note")))}</li>')
+        lines.append('</ul></section>')
+    lines.append('<section><h2>错因专题</h2><ul>')
     for cluster in report.get('clusters', []):
         lines.append(f'<li>{escape(cluster.get("root_cause", "待人工确认"))}（优先级 {cluster.get("priority", 0)}）：{escape(", ".join(cluster.get("question_ids", [])))}</li>')
         for evidence in cluster.get('evidence', []):

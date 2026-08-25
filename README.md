@@ -40,6 +40,14 @@ PYTHONPATH=. pytest -q
 - 创建任务时若 `stage/subject/province` 没有对应分区，接口返回 422 `knowledge_partition_not_found` 并附带可用分区列表，不会创建出一个永远匹配不到知识点的任务。
 - 任务、分析报告和个人数据导出都记录所用分区（阶段、科目、省份、知识库版本、课程标准），知识点匹配结果也带上分区标识，便于追溯。
 
+## 课程范围与资料覆盖范围
+
+报告的 `scope_coverage` 把知识库分区的课程范围和本次考试资料实际考查到的范围分开呈现，Markdown/HTML 导出同样有这一节：
+
+- 每个课程知识点标记为 `assessed_with_errors`、`assessed_without_errors` 或 `not_assessed`。
+- 汇总课程知识点总数、已考查数、未考查数、覆盖率和未考查章节列表。
+- `not_assessed` 只表示本次上传的资料没有覆盖该知识点，不能据此判定学生未掌握。
+
 ## 演示流程
 
 1. 首页选择知识库分区并创建任务。
