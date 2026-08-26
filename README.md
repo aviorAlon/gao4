@@ -33,6 +33,16 @@ PYTHONPATH=. pytest -q
 - 视觉接口使用 OpenAI-compatible `/chat/completions` 多模态请求，图片编码为 base64 data URL，并要求 JSON 响应。
 - 未配置视觉解析器、请求失败或响应 JSON 无法解析时，结果明确标记为 `manual_confirmation_required`，不会伪造 OCR 成功。
 
+## 模型推理（错因诊断与报告概述）
+
+- 按角色配置，两个角色互相独立，默认都不开启：
+  - `analysis`（错因诊断）：`EXAM_DIAGNOSIS_ANALYSIS_API_KEY` / `EXAM_DIAGNOSIS_ANALYSIS_BASE_URL` / `EXAM_DIAGNOSIS_ANALYSIS_MODEL` / `EXAM_DIAGNOSIS_ANALYSIS_TIMEOUT`
+  - `report`（报告概述）：`EXAM_DIAGNOSIS_REPORT_API_KEY` / `EXAM_DIAGNOSIS_REPORT_BASE_URL` / `EXAM_DIAGNOSIS_REPORT_MODEL` / `EXAM_DIAGNOSIS_REPORT_TIMEOUT`
+- 只需配置对应角色的 `API_KEY` 即可启用；`BASE_URL`/`MODEL` 不填时分别默认为 DeepSeek 的 `https://api.deepseek.com`、`deepseek-v4-pro`（analysis）/ `deepseek-v4-flash`（report），换成任意 OpenAI-compatible 服务商只需覆盖这两项。
+- `analysis` 角色只对错题调用，按知识点+题目内容判断根因（条件遗漏/计算错误/概念不清/审题错误/书写不规范/待人工确认之一）并给出针对这道题的解释和规避建议，结果按题目 id 缓存，同一题不会重复调用。
+- `report` 角色只读取已经算好的结构化统计（错题数、根因分布、复习优先级前几项、质量提示），生成一段面向学生/家长的概述文字，不允许编造数据里没有的信息。
+- 两个角色都遵循和视觉解析一致的规则：没配置、请求失败、响应不是合法 JSON 或不满足预期结构时一律判定为不可用，自动退回原有的关键词规则（`analysis`）或直接不生成概述段落（`report`），不会伪造成功。
+
 ## 知识库分区
 
 - `GET /api/knowledge-partitions` 返回全部可用分区及其版本、课程标准和知识点数量。

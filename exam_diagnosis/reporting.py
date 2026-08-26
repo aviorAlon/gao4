@@ -1,5 +1,6 @@
 from __future__ import annotations
 from html import escape
+import json
 from typing import Any
 
 PRIORITY_LABELS = {'high': '高', 'medium': '中', 'low': '低', 'none': '暂无错题'}
@@ -17,6 +18,35 @@ def answer_or_withheld(question: dict[str, Any]) -> str:
     return text(question.get('answer'))
 
 
+def generate_report_summary(client: Any, report: dict[str, Any]) -> str | None:
+    """Ask the report-writing model role for a short plain-language overview of `report`.
+
+    Only reads already-computed structured fields — never invents numbers. Returns None on any
+    failure (unconfigured client, network error, malformed response); callers should treat that
+    exactly like an absent `summary` and render nothing, the same way an unreviewed verification
+    answer is withheld rather than guessed.
+    """
+    system = (
+        '你是学习报告撰写助手。根据结构化的错题诊断数据，写一段面向学生和家长的概述，'
+        '客观陈述错题数量、主要错因和复习重点，不要编造数据中没有出现的信息，不超过150字。'
+        '严格只返回 JSON，不要输出其它文字：{"summary": string}'
+    )
+    payload = {
+        'wrong_question_count': report.get('wrong_question_count'),
+        'root_cause_counts': report.get('root_cause_counts'),
+        'top_review_priorities': [
+            {'chapter': item.get('chapter'), 'name': item.get('name'), 'review_priority': item.get('review_priority')}
+            for item in (report.get('review_order') or [])[:5]
+        ],
+        'quality_flags': [flag.get('message') for flag in (report.get('quality_flags') or [])],
+    }
+    result = client.complete_json(system, json.dumps(payload, ensure_ascii=False))
+    if not isinstance(result, dict):
+        return None
+    summary = result.get('summary')
+    return summary.strip() if isinstance(summary, str) and summary.strip() else None
+
+
 def render_markdown(report: dict[str, Any]) -> str:
     lines = ['# Exam Diagnosis 报告', '', f"- 错题数：{report.get('wrong_question_count', 0)}"]
     versions = report.get('exam_versions')
@@ -24,6 +54,9 @@ def render_markdown(report: dict[str, Any]) -> str:
         rendered = '；'.join('{} v{}'.format(text(item.get('name')), item.get('version')) for item in versions)
         lines.append(f'- 分析依据的考试解析版本：{rendered}')
     lines.append('')
+    summary = report.get('summary')
+    if summary:
+        lines.extend(['## 概述', summary, ''])
     flags = report.get('quality_flags')
     if flags:
         lines.append('## 结论可信度提示')
@@ -73,6 +106,9 @@ def render_html(report: dict[str, Any]) -> str:
     if versions:
         rendered = '；'.join('{} v{}'.format(text(item.get('name')), item.get('version')) for item in versions)
         lines.append(f'<p>分析依据的考试解析版本：{escape(rendered)}</p>')
+    summary = report.get('summary')
+    if summary:
+        lines.append(f'<section><h2>概述</h2><p>{escape(summary)}</p></section>')
     flags = report.get('quality_flags')
     if flags:
         lines.append('<section><h2>结论可信度提示</h2><ul>')

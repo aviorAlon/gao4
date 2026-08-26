@@ -12,6 +12,8 @@ from .diagnosis import diagnose_records
 from .storage import SQLiteMapping
 from .knowledge import KnowledgePartitionNotFound, available_partitions, find_partition
 from .review import APPROVED, NEEDS_REVIEW, review_report, withhold_unreviewed_answer
+from .llm import client_from_env
+from .reporting import generate_report_summary
 
 LOCAL_USER_ID = 'local'
 USER_HEADER = 'X-User-Id'
@@ -907,10 +909,15 @@ def get_analysis_report(rid: str):
         'quality_flags': build_quality_flags(run['exam_ids'], records, unmapped),
         'source_question_ids': [record['id'] for record in records],
     }
-    report.update(diagnose_records(records))
+    report.update(diagnose_records(records, client=client_from_env('analysis')))
     report['review'] = review_report(report, partition)
     if report['review']['status'] != APPROVED:
         report['quality_flags'].append({'code': 'review_pending', 'severity': 'warning', 'detail': [item['code'] for item in report['review']['findings']], 'message': f"独立审查发现 {len(report['review']['findings'])} 处问题，{report['review']['pending_verification_questions']} 道验证题的参考答案在复核通过前不会展示"})
+    report_client = client_from_env('report')
+    if report_client is not None:
+        summary = generate_report_summary(report_client, report)
+        if summary:
+            report['summary'] = summary
     verification_ids = []
     for generated in report['verification_questions']:
         vid = str(uuid4())
