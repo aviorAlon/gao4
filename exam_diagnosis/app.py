@@ -6,7 +6,7 @@ import hashlib
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
-from .parser import LocalParser, OpenAICompatibleVisionParser, extract_pdf_text
+from .parser import ModelTextSplitter, OpenAICompatibleVisionParser, extract_pdf_text
 from .knowledge import match_knowledge_points
 from .diagnosis import diagnose_records
 from .storage import SQLiteMapping
@@ -471,7 +471,7 @@ def run_job(job_id: str):
                     asset['ocr_warning'] = pdf_result.get('warning', '')
                 elif asset.get('media_type', '').startswith('text/'):
                     content = content.decode('utf-8', errors='replace')
-                parser = LocalParser() if isinstance(content, str) else OpenAICompatibleVisionParser()
+                parser = ModelTextSplitter(client_from_env('split')) if isinstance(content, str) else OpenAICompatibleVisionParser()
                 result = parser.parse_page(asset['filename'], content, asset['page_order'])
                 submission = SUBMISSIONS[exam['submission_id']]
                 result.subject_mismatch = bool(result.subject and result.subject != submission['subject'])

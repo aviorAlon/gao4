@@ -6,12 +6,16 @@ be reported as a success. Callers get ``None`` back and are expected to fall
 back to their deterministic rule-based path — the same rule that keeps OCR
 from claiming a fake success when no vision parser is configured.
 
-Two roles are defined today:
+Three roles are defined today:
 
 - ``analysis``: root-cause diagnosis of a wrong question. Needs real math
   reasoning, defaults to ``deepseek-v4-pro`` (thinking mode).
 - ``report``: light narrative/summary writing. Defaults to the cheaper
   ``deepseek-v4-flash``.
+- ``split``: splitting a page's extracted text into individual questions.
+  Real exam papers use too many incompatible numbering conventions for a
+  fixed regex to cover reliably; this is a light classification-shaped task,
+  so it also defaults to ``deepseek-v4-flash``.
 
 Every role is opt-in and independently configurable via environment
 variables, e.g. for ``analysis``:
@@ -40,6 +44,7 @@ DEEPSEEK_BASE_URL = 'https://api.deepseek.com'
 ROLE_DEFAULTS = {
     'analysis': {'base_url': DEEPSEEK_BASE_URL, 'model': 'deepseek-v4-pro'},
     'report': {'base_url': DEEPSEEK_BASE_URL, 'model': 'deepseek-v4-flash'},
+    'split': {'base_url': DEEPSEEK_BASE_URL, 'model': 'deepseek-v4-flash'},
 }
 
 

@@ -37,3 +37,10 @@ def test_base_url_and_model_are_overridable(monkeypatch):
 def test_unknown_role_rejected():
     with pytest.raises(ValueError):
         client_from_env('translation')
+
+
+def test_split_role_defaults_to_cheaper_model(monkeypatch):
+    monkeypatch.setenv('EXAM_DIAGNOSIS_SPLIT_API_KEY', 'sk-test')
+    monkeypatch.delenv('EXAM_DIAGNOSIS_SPLIT_MODEL', raising=False)
+    client = client_from_env('split')
+    assert client.model == 'deepseek-v4-flash'

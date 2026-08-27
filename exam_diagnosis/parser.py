@@ -9,6 +9,22 @@ import urllib.error
 from typing import Any
 
 
+# Best-effort, last-resort question-boundary matcher for LocalParser — used only when the
+# `split` model role (ModelTextSplitter, below) is unconfigured or fails. Deliberately narrow:
+# real exam PDFs are full of numbers that aren't question numbers (fractions broken across
+# OCR/text-extraction lines, sub-question labels like "(1)(2)" inside one essay question,
+# answer-choice values). Matching against a real 2025 national paper's extracted text, adding
+# "(N)"-style bracket numbering here caused essay sub-questions to be mis-split as new top-level
+# questions — so only "第N题"/"N题"/"N."/"N、"/"N．" are matched, all guarded so a number can't be
+# part of a longer number (no digit immediately before/after), which also keeps decimals like
+# "2.5" from being read as a question boundary. Whitespace here is [ \t] on purpose, not \s: \s
+# matches \n too, and against that same real paper it let a bare fraction-denominator line like
+# "2." swallow the *next* line as if it were the captured question text. This still won't handle
+# every paper; that's why it's a fallback and why callers must treat its output as
+# review_required, never as a green light.
+QUESTION_NUMBER_RE = re.compile(r"(?<!\d)(?:第[ \t]*)?(\d{1,3})[ \t]*(?:题|[.、．])(?!\d)[ \t]*([^\n]+)")
+
+
 def extract_pdf_text(path: str | Path) -> dict[str, Any]:
     try:
         import fitz
@@ -75,7 +91,7 @@ class LocalParser:
         text = content.strip()
         subject = "物理" if "物理" in text else ("数学" if "数学" in text or "math" in filename.lower() else "")
         questions = []
-        for match in re.finditer(r"(?:第\s*)?(\d{1,3})\s*题\s*([^\n]+)", text):
+        for match in re.finditer(QUESTION_NUMBER_RE, text):
             number, question_text = match.groups()
             questions.append(QuestionCandidate(number, question_text.strip(), 0.85))
         return PageParseResult(
@@ -175,3 +191,57 @@ class OpenAICompatibleVisionParser(LocalParser):
         if any(token in lowered for token in ("paper", "试卷", "question")):
             return "paper"
         return "unknown"
+
+
+class ModelTextSplitter:
+    """Splits already-extracted text (PDF text layer, plain-text uploads) into question
+    candidates via the `split` model role instead of the fixed-format QUESTION_NUMBER_RE regex.
+
+    Real exam papers mix too many incompatible numbering conventions for a regex to cover
+    reliably. This is the text-content counterpart to OpenAICompatibleVisionParser and follows
+    the same never-fake-success rule: no client, or a failed/malformed model call, falls back to
+    LocalParser's regex — but that fallback's output is always marked review_required, because a
+    best-effort regex match is not the same claim as a model actually reading the page.
+    """
+
+    def __init__(self, client: Any = None):
+        self.client = client
+
+    def parse_page(self, filename: str, text: str, page_order: int) -> PageParseResult:
+        material_type = LocalParser.classify_material(filename)
+        if self.client is not None:
+            split = self._split_with_model(text)
+            if split is not None:
+                questions = split['questions']
+                return PageParseResult(
+                    filename=Path(filename).name, page_order=page_order, material_type=material_type,
+                    subject=split['subject'], ocr_text=text,
+                    ocr_confidence=max((q.confidence for q in questions), default=0.0),
+                    review_required=not questions or material_type == "unknown",
+                    questions=questions,
+                )
+        fallback = LocalParser().parse_page(filename, text, page_order)
+        fallback.review_required = True
+        if not fallback.warning:
+            fallback.warning = (
+                '题目切分模型未识别出题目，退回关键词规则，请人工确认。' if not fallback.questions else
+                '题目切分模型未配置或调用失败，退回关键词规则切分，请人工确认切分是否准确、完整。'
+            )
+        return fallback
+
+    def _split_with_model(self, text: str) -> dict[str, Any] | None:
+        system = (
+            '你是试卷版面理解助手。给定一页试卷提取出的纯文本，按语义切分出每一道独立的题目。'
+            '不要把同一道题内部的子问题（如(1)(2)）拆成不同的题目，也不要把选项当成题目，不要编造文本中没有的内容。'
+            '严格只返回 JSON，不要输出其它文字：{"subject": 试卷科目（如数学/物理，识别不出留空字符串）, '
+            '"questions": [{"question_number": 题号字符串, "question_text": 题干全文, "confidence": 0到1之间的置信度}]}'
+        )
+        result = self.client.complete_json(system, text[:20000])
+        if not isinstance(result, dict) or not isinstance(result.get('questions'), list) or not isinstance(result.get('subject', ''), str):
+            return None
+        questions = []
+        for item in result['questions']:
+            if not isinstance(item, dict) or not isinstance(item.get('question_number'), (str, int)) or not isinstance(item.get('question_text'), str) or not isinstance(item.get('confidence'), (int, float)):
+                return None
+            questions.append(QuestionCandidate(str(item['question_number']), item['question_text'], float(item['confidence'])))
+        return {'subject': result.get('subject', ''), 'questions': questions}
