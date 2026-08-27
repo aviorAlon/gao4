@@ -4,6 +4,7 @@ from uuid import uuid4
 import re
 import hashlib
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 from .parser import ModelTextSplitter, OpenAICompatibleVisionParser, extract_pdf_text
@@ -49,6 +50,19 @@ def enforce_resource_owner(request: Request, user_id: str = Depends(current_user
             raise HTTPException(status_code=404, detail={'error': 'resource_not_found'})
 
 app = FastAPI(title="Exam Diagnosis", version="0.1.0", dependencies=[Depends(enforce_resource_owner)])
+
+# Frontend now lives in its own project (frontend/, React + Vite) instead of the inline HTML this
+# app used to serve — it calls this API from a different origin (Vite's dev server port, and later
+# whatever origin the packaged desktop client uses), so the browser needs CORS to allow it. This
+# is a local single-user MVP behind no auth beyond X-User-Id, so the practical exposure of a wide
+# localhost allowlist is low; tighten this before this ever listens on more than 127.0.0.1.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origin_regex=r'https?://(localhost|127\.0\.0\.1)(:\d+)?',
+    allow_credentials=True,
+    allow_methods=['*'],
+    allow_headers=['*'],
+)
 
 MIN_ACADEMIC_YEAR_RULE = '学年范围形如 25-26，且至少覆盖一整学年'
 
