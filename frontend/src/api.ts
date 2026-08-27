@@ -137,3 +137,239 @@ export async function fetchReport(runId: string): Promise<AnalysisReport> {
   const { data } = await api.get<AnalysisReport>(`/api/analysis-runs/${runId}/report`)
   return data
 }
+
+// --- Knowledge partitions ---
+
+export interface KnowledgePartition {
+  stage: string
+  subject: string
+  province: string
+  curriculum_year: number
+  academic_year_range: string[]
+  version: string
+  curriculum: string
+  knowledge_point_count: number
+  resource: string
+}
+
+export async function listKnowledgePartitions(): Promise<KnowledgePartition[]> {
+  const { data } = await api.get<{ partitions: KnowledgePartition[] }>('/api/knowledge-partitions')
+  return data.partitions
+}
+
+// --- Submissions (任务) ---
+
+export interface Submission {
+  id: string
+  stage: string
+  subject: string
+  province: string
+  school_grade: string
+  academic_year_label: string
+  curriculum_year: number
+  status: string
+  exam_count: number
+  max_exam_count: number
+  knowledge_partition: KnowledgePartition
+}
+
+export interface CreateSubmissionInput {
+  stage: string
+  subject: string
+  province: string
+  school_grade: string
+  academic_year_label: string
+  curriculum_year?: number
+}
+
+export async function listSubmissions(): Promise<Submission[]> {
+  const { data } = await api.get<Submission[]>('/api/submissions')
+  return data
+}
+
+export async function createSubmission(input: CreateSubmissionInput): Promise<Submission> {
+  const { data } = await api.post<Submission>('/api/submissions', input)
+  return data
+}
+
+export async function getSubmission(id: string): Promise<Submission> {
+  const { data } = await api.get<Submission>(`/api/submissions/${id}`)
+  return data
+}
+
+export async function deleteSubmission(id: string): Promise<void> {
+  await api.delete(`/api/submissions/${id}`)
+}
+
+// --- Exams (考试) ---
+
+export interface DraftQuestion {
+  id: string
+  question_number: string
+  question_text: string
+  is_wrong_question: boolean
+  original_question_available: boolean
+  student_answer?: string | null
+  original_source?: { asset_id: string; page_id?: string; filename: string } | null
+  confirmation_status: string
+}
+
+export interface Exam {
+  id: string
+  submission_id: string
+  sequence_no: number
+  name: string
+  exam_date: string | null
+  exam_type: string | null
+  status: string
+  version?: number
+  questions: unknown[]
+  draft_questions: DraftQuestion[]
+  excluded_pages: Array<{ page_id: string; filename: string; reason: string; decided_by: string; questions_excluded: number }>
+}
+
+export async function listExams(submissionId: string): Promise<Exam[]> {
+  const { data } = await api.get<Exam[]>(`/api/submissions/${submissionId}/exams`)
+  return data
+}
+
+export async function createExam(submissionId: string, name: string): Promise<Exam> {
+  const { data } = await api.post<Exam>(`/api/submissions/${submissionId}/exams`, { name })
+  return data
+}
+
+export async function getExam(examId: string): Promise<Exam> {
+  const { data } = await api.get<Exam>(`/api/exams/${examId}`)
+  return data
+}
+
+export async function confirmExam(examId: string): Promise<Exam> {
+  const { data } = await api.post<Exam>(`/api/exams/${examId}/confirm`, {})
+  return data
+}
+
+export async function reopenExam(examId: string): Promise<{ id: string; status: string; version: number }> {
+  const { data } = await api.post(`/api/exams/${examId}/reopen`)
+  return data
+}
+
+// --- Upload + parse pipeline ---
+
+export interface UploadSession { id: string; exam_id: string; status: string; asset_ids: string[]; job_id?: string }
+
+export async function createUploadSession(examId: string): Promise<UploadSession> {
+  const { data } = await api.post<UploadSession>(`/api/exams/${examId}/upload-sessions`)
+  return data
+}
+
+export async function uploadSessionAsset(sessionId: string, file: File) {
+  const form = new FormData()
+  form.append('file', file)
+  const { data } = await api.post(`/api/upload-sessions/${sessionId}/assets`, form)
+  return data
+}
+
+export async function finishUploadSession(sessionId: string): Promise<UploadSession> {
+  const { data } = await api.post<UploadSession>(`/api/upload-sessions/${sessionId}/finish`)
+  return data
+}
+
+export interface JobStage { name: string; status: string; error: string | null }
+export interface Job { id: string; exam_id: string; status: string; stages: JobStage[]; failed_stage?: string; error?: string }
+
+export async function runJob(jobId: string): Promise<Job> {
+  const { data } = await api.post<Job>(`/api/jobs/${jobId}/run`)
+  return data
+}
+
+export async function getJob(jobId: string): Promise<Job> {
+  const { data } = await api.get<Job>(`/api/jobs/${jobId}`)
+  return data
+}
+
+export async function retryJob(jobId: string): Promise<Job> {
+  const { data } = await api.post<Job>(`/api/jobs/${jobId}/retry`)
+  return data
+}
+
+// --- Parsed pages ---
+
+export interface ExamPage {
+  id: string
+  asset_id: string
+  page_order: number
+  material_type: string
+  subject: string
+  ocr_text: string
+  ocr_confidence: number
+  ocr_status: string
+  subject_mismatch: boolean
+  include_in_analysis: boolean
+  exclusion_reason: string
+  inclusion_decided_by: string
+  review_required: boolean
+}
+
+export async function listPages(examId: string): Promise<{ pages: ExamPage[] }> {
+  const { data } = await api.get(`/api/exams/${examId}/pages`)
+  return data
+}
+
+export async function updatePage(pageId: string, changes: Partial<Pick<ExamPage, 'material_type' | 'include_in_analysis' | 'page_order'>>) {
+  const { data } = await api.patch(`/api/pages/${pageId}`, changes)
+  return data
+}
+
+// --- Draft questions ---
+
+export async function getParseDraft(examId: string): Promise<{ questions: DraftQuestion[]; status: string; version: number }> {
+  const { data } = await api.get(`/api/exams/${examId}/parse-draft`)
+  return data
+}
+
+export async function updateParseQuestion(examId: string, index: number, changes: Partial<Pick<DraftQuestion, 'question_text' | 'is_wrong_question' | 'student_answer' | 'original_question_available'>>) {
+  const { data } = await api.patch(`/api/exams/${examId}/parse-draft/questions/${index}`, changes)
+  return data
+}
+
+// --- Question records (scoring) ---
+
+export interface QuestionRecord {
+  id: string
+  exam_id: string
+  question_number: string
+  question_text: string
+  is_wrong_question: boolean
+  student_answer: { text?: string }
+  score: { obtained: number | null; total: number | null; lost_points: number | null }
+  correction: { teacher_comment: string }
+}
+
+export async function listQuestionRecords(examId: string): Promise<{ records: QuestionRecord[] }> {
+  const { data } = await api.get(`/api/exams/${examId}/question-records`)
+  return data
+}
+
+export async function updateQuestionRecord(recordId: string, changes: { score_obtained?: number; score_total?: number; teacher_comment?: string }) {
+  const { data } = await api.patch(`/api/question-records/${recordId}`, changes)
+  return data
+}
+
+// --- Analysis runs ---
+
+export interface AnalysisRunRef { id: string; status: string; submission_id: string; exam_ids: string[] }
+
+export async function createAnalysisRun(submissionId: string, examIds: string[]): Promise<AnalysisRunRef> {
+  const { data } = await api.post(`/api/submissions/${submissionId}/analysis-runs`, { exam_ids: examIds })
+  return data
+}
+
+export async function confirmStartRun(runId: string): Promise<{ status: string }> {
+  const { data } = await api.post(`/api/analysis-runs/${runId}/confirm-start`)
+  return data
+}
+
+export async function listAnalysisRuns(submissionId: string): Promise<{ runs: AnalysisRunRef[] }> {
+  const { data } = await api.get(`/api/submissions/${submissionId}/analysis-runs`)
+  return data
+}

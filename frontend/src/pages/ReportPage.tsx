@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
-  Alert, Card, Collapse, Descriptions, Divider, Empty, Flex, Input, Progress,
+  Alert, Breadcrumb, Card, Collapse, Descriptions, Divider, Empty, Flex, Input, Progress,
   Result, Space, Spin, Statistic, Table, Tag, Typography, Row, Col,
 } from 'antd'
 import {
@@ -231,13 +232,16 @@ function VerificationQuestionsCard({ items }: { items: AnalysisReport['verificat
 }
 
 export default function ReportPage() {
-  const [runId, setRunId] = useState(() => new URLSearchParams(window.location.search).get('run') ?? '')
+  const { runId: routeRunId } = useParams()
+  const navigate = useNavigate()
+  const runId = routeRunId ?? new URLSearchParams(window.location.search).get('run') ?? ''
   const [inputValue, setInputValue] = useState(runId)
   const [report, setReport] = useState<AnalysisReport | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
+    setInputValue(runId)
     if (!runId) return
     setLoading(true)
     setError(null)
@@ -249,6 +253,7 @@ export default function ReportPage() {
 
   return (
     <Flex vertical gap="large" style={{ maxWidth: 900, margin: '0 auto', padding: '24px 16px' }}>
+      <Breadcrumb items={[{ title: <Link to="/">Exam Diagnosis</Link> }, { title: '报告' }]} />
       <Title level={2} style={{ marginBottom: 0 }}>Exam Diagnosis 报告</Title>
 
       <Space.Compact style={{ maxWidth: 480 }}>
@@ -256,7 +261,7 @@ export default function ReportPage() {
           placeholder="粘贴 analysis_run_id"
           value={inputValue}
           onChange={(e) => setInputValue(e.target.value)}
-          onPressEnter={() => setRunId(inputValue.trim())}
+          onPressEnter={() => navigate(`/reports/${inputValue.trim()}`)}
         />
       </Space.Compact>
 
