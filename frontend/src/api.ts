@@ -373,3 +373,65 @@ export async function listAnalysisRuns(submissionId: string): Promise<{ runs: An
   const { data } = await api.get(`/api/submissions/${submissionId}/analysis-runs`)
   return data
 }
+
+// --- Verification questions + mastery (the learning-loop close: answer, self-score, track mastery) ---
+
+export interface VerificationAttempt {
+  id: string
+  answer: string
+  score: number
+  max_score: number
+  duration_seconds: number
+  passed: boolean
+}
+
+export interface VerificationQuestionEntity {
+  id: string
+  analysis_run_id: string
+  submission_id: string
+  knowledge_id: string
+  question_text: string
+  answer: string | null
+  target_error: string
+  source_question_ids: string[]
+  review_status: 'approved' | 'needs_review' | string
+  review_findings: string[]
+  answer_withheld: boolean
+  withheld_reason?: string[]
+  attempts: VerificationAttempt[]
+}
+
+export async function listVerificationQuestions(runId: string): Promise<{ questions: VerificationQuestionEntity[] }> {
+  const { data } = await api.get(`/api/analysis-runs/${runId}/verification-questions`)
+  return data
+}
+
+export async function submitVerificationAttempt(
+  questionId: string,
+  payload: { answer: string; score: number; max_score: number; duration_seconds?: number },
+): Promise<VerificationAttempt> {
+  const { data } = await api.post(`/api/verification-questions/${questionId}/attempts`, payload)
+  return data
+}
+
+export async function reviewVerificationQuestion(
+  questionId: string,
+  payload: { approved: boolean; answer?: string; note?: string },
+): Promise<VerificationQuestionEntity> {
+  const { data } = await api.post(`/api/verification-questions/${questionId}/review`, payload)
+  return data
+}
+
+export interface MasteryRecord {
+  id: string
+  submission_id: string
+  knowledge_id: string
+  error_cluster: string
+  status: 'not_started' | 'in_progress' | 'provisionally_resolved' | 'resolved' | string
+  attempt_history: Array<{ verification_question_id: string; passed: boolean }>
+}
+
+export async function listMasteryRecords(submissionId: string): Promise<{ records: MasteryRecord[] }> {
+  const { data } = await api.get(`/api/submissions/${submissionId}/mastery-records`)
+  return data
+}

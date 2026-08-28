@@ -1,13 +1,17 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
-  Alert, Breadcrumb, Card, Collapse, Descriptions, Divider, Empty, Flex, Input, Progress,
-  Result, Space, Spin, Statistic, Table, Tag, Typography, Row, Col,
+  Alert, Breadcrumb, Button, Card, Collapse, Descriptions, Divider, Empty, Flex, Input, InputNumber, Progress,
+  Result, Space, Spin, Statistic, Table, Tag, Typography, Row, Col, message,
 } from 'antd'
 import {
   BulbOutlined, CheckCircleOutlined, ExclamationCircleOutlined,
 } from '@ant-design/icons'
-import { API_BASE, fetchReport, type AnalysisReport, type ReviewOrderItem, type WrongQuestion } from '../api'
+import {
+  API_BASE, fetchReport, listMasteryRecords, listVerificationQuestions, reviewVerificationQuestion,
+  submitVerificationAttempt, type AnalysisReport, type MasteryRecord, type ReviewOrderItem,
+  type VerificationQuestionEntity, type WrongQuestion,
+} from '../api'
 
 const { Title, Text, Paragraph } = Typography
 
@@ -207,24 +211,141 @@ function WrongQuestionsCard({ items }: { items: WrongQuestion[] }) {
   )
 }
 
-function VerificationQuestionsCard({ items }: { items: AnalysisReport['verification_questions'] }) {
-  if (!items.length) return null
+const MASTERY_LABEL: Record<string, string> = {
+  not_started: '未开始', in_progress: '练习中', provisionally_resolved: '初步掌握', resolved: '已掌握',
+}
+const MASTERY_COLOR: Record<string, string> = {
+  not_started: 'default', in_progress: 'processing', provisionally_resolved: 'gold', resolved: 'success',
+}
+
+function MasteryTag({ status }: { status?: string }) {
+  if (!status) return null
+  return <Tag color={MASTERY_COLOR[status] ?? 'default'}>{MASTERY_LABEL[status] ?? status}</Tag>
+}
+
+/** Admin-side gate: approve (optionally correcting) a reference answer the review pass withheld. */
+function ReviewGate({ question, onReviewed }: { question: VerificationQuestionEntity; onReviewed: () => void }) {
+  const [draftAnswer, setDraftAnswer] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  async function onApprove() {
+    if (!draftAnswer.trim()) { message.error('答案不能为空'); return }
+    setBusy(true)
+    try {
+      await reviewVerificationQuestion(question.id, { approved: true, answer: draftAnswer })
+      message.success('已复核通过')
+      onReviewed()
+    } catch (e: any) {
+      message.error(e?.response?.data?.error ?? '复核失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Alert
+      type="warning" showIcon title="参考答案未通过复核，暂不展示给学生"
+      description={
+        <Flex vertical gap="small" style={{ marginTop: 8 }}>
+          <Text type="secondary">{question.withheld_reason?.join('；')}</Text>
+          <Input.TextArea
+            placeholder="人工填写/修正参考答案后通过复核" autoSize
+            value={draftAnswer} onChange={(e) => setDraftAnswer(e.target.value)}
+          />
+          <Button size="small" onClick={onApprove} loading={busy} style={{ alignSelf: 'flex-start' }}>
+            复核通过
+          </Button>
+        </Flex>
+      }
+    />
+  )
+}
+
+/** Student-side loop: reveal the answer on demand, self-score an attempt, see pass/fail immediately. */
+function VerificationQuestionItem({ question, mastery, onChanged }: {
+  question: VerificationQuestionEntity
+  mastery?: MasteryRecord
+  onChanged: () => void
+}) {
+  const [showAnswer, setShowAnswer] = useState(false)
+  const [answer, setAnswer] = useState('')
+  const [score, setScore] = useState<number | null>(null)
+  const [maxScore, setMaxScore] = useState<number | null>(10)
+  const [submitting, setSubmitting] = useState(false)
+
+  const lastAttempt = question.attempts[question.attempts.length - 1]
+
+  async function onSubmit() {
+    if (score == null || maxScore == null) { message.error('请填写得分和满分'); return }
+    setSubmitting(true)
+    try {
+      await submitVerificationAttempt(question.id, { answer, score, max_score: maxScore })
+      message.success('提交成功')
+      setAnswer('')
+      onChanged()
+    } catch (e: any) {
+      message.error(e?.response?.data?.error ?? '提交失败')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <Flex vertical gap={8}>
+      <Flex justify="space-between" align="center" wrap>
+        <Text strong>针对错因：{question.target_error}</Text>
+        <Space>
+          <MasteryTag status={mastery?.status} />
+          {question.review_status === 'approved'
+            ? <Tag icon={<CheckCircleOutlined />} color="success">已复核</Tag>
+            : <Tag icon={<ExclamationCircleOutlined />} color="warning">待复核</Tag>}
+        </Space>
+      </Flex>
+      <Text>{question.question_text}</Text>
+
+      {question.answer_withheld
+        ? <ReviewGate question={question} onReviewed={onChanged} />
+        : showAnswer
+          ? <Text type="secondary">参考答案：{question.answer}</Text>
+          : <Button size="small" onClick={() => setShowAnswer(true)}>查看参考答案</Button>}
+
+      <Flex gap="small" wrap align="flex-end">
+        <Input.TextArea
+          placeholder="在这里写下你的作答" autoSize style={{ minWidth: 260, flex: 1 }}
+          value={answer} onChange={(e) => setAnswer(e.target.value)}
+        />
+        <InputNumber placeholder="得分" min={0} value={score} onChange={setScore} style={{ width: 80 }} />
+        <Text type="secondary">/</Text>
+        <InputNumber placeholder="满分" min={1} value={maxScore} onChange={setMaxScore} style={{ width: 80 }} />
+        <Button type="primary" onClick={onSubmit} loading={submitting} disabled={question.answer_withheld}>
+          提交作答
+        </Button>
+      </Flex>
+
+      {lastAttempt && (
+        <Alert
+          type={lastAttempt.passed ? 'success' : 'error'} showIcon
+          title={lastAttempt.passed ? '本次通过' : '本次未通过（需要 ≥80% 才算通过）'}
+          description={`最近一次：${lastAttempt.score}/${lastAttempt.max_score} 分，累计作答 ${question.attempts.length} 次`}
+        />
+      )}
+    </Flex>
+  )
+}
+
+function VerificationQuestionsCard({ questions, mastery, onChanged }: {
+  questions: VerificationQuestionEntity[]
+  mastery: MasteryRecord[]
+  onChanged: () => void
+}) {
+  if (!questions.length) return null
+  const masteryFor = (q: VerificationQuestionEntity) =>
+    mastery.find((m) => m.knowledge_id === q.knowledge_id && m.error_cluster === q.target_error)
   return (
     <Card title="验证题">
       <ItemStack>
-        {items.map((q, i) => (
-          <Flex vertical gap={4} key={i}>
-            <Flex justify="space-between" align="center">
-              <Text strong>验证题 {i + 1}（针对：{q.target_error}）</Text>
-              {q.review_status === 'approved'
-                ? <Tag icon={<CheckCircleOutlined />} color="success">已复核</Tag>
-                : <Tag icon={<ExclamationCircleOutlined />} color="warning">待复核</Tag>}
-            </Flex>
-            <Text>{q.question_text}</Text>
-            {q.answer_withheld
-              ? <Alert type="warning" showIcon title="参考答案未通过复核，暂不展示" description={q.withheld_reason?.join('；')} />
-              : <Text type="secondary">参考答案：{q.answer}</Text>}
-          </Flex>
+        {questions.map((q) => (
+          <VerificationQuestionItem key={q.id} question={q} mastery={masteryFor(q)} onChanged={onChanged} />
         ))}
       </ItemStack>
     </Card>
@@ -237,8 +358,21 @@ export default function ReportPage() {
   const runId = routeRunId ?? new URLSearchParams(window.location.search).get('run') ?? ''
   const [inputValue, setInputValue] = useState(runId)
   const [report, setReport] = useState<AnalysisReport | null>(null)
+  const [verificationQuestions, setVerificationQuestions] = useState<VerificationQuestionEntity[]>([])
+  const [mastery, setMastery] = useState<MasteryRecord[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  async function reloadVerification() {
+    if (!runId) return
+    const { questions } = await listVerificationQuestions(runId)
+    setVerificationQuestions(questions)
+    const submissionId = questions[0]?.submission_id
+    if (submissionId) {
+      const { records } = await listMasteryRecords(submissionId)
+      setMastery(records)
+    }
+  }
 
   useEffect(() => {
     setInputValue(runId)
@@ -249,6 +383,7 @@ export default function ReportPage() {
       .then(setReport)
       .catch((e) => setError(e?.response?.data?.error ?? e.message ?? '加载失败'))
       .finally(() => setLoading(false))
+    reloadVerification()
   }, [runId])
 
   return (
@@ -290,7 +425,7 @@ export default function ReportPage() {
           <KnowledgeTreeCard tree={report.knowledge_tree} />
           <ReviewOrderCard items={report.review_order} />
           <WrongQuestionsCard items={report.wrong_question_collection} />
-          <VerificationQuestionsCard items={report.verification_questions} />
+          <VerificationQuestionsCard questions={verificationQuestions} mastery={mastery} onChanged={reloadVerification} />
 
           <Space>
             <a href={`${API_BASE}/api/reports/${report.analysis_run_id}/export?format=md`}>导出 Markdown</a>
