@@ -1,0 +1,168 @@
+.report-page {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 40px 20px 80px;
+}
+
+/* --- Masthead: the stamped-case-number header of a chart --- */
+
+.masthead {
+  border-bottom: 2px solid var(--ink);
+  padding-bottom: 20px;
+  margin-bottom: 28px;
+}
+
+.masthead-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 10px;
+}
+
+.masthead-kicker {
+  font-family: var(--font-data);
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  color: var(--ink-soft);
+  text-transform: uppercase;
+}
+
+.masthead-case {
+  font-family: var(--font-data);
+  font-size: 12px;
+  color: var(--ink-soft);
+  border: 1px solid var(--rule-strong);
+  padding: 2px 8px;
+  border-radius: 2px;
+}
+
+.masthead-title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 32px;
+  margin: 0 0 6px;
+  color: var(--ink);
+  line-height: 1.25;
+}
+
+.masthead-meta {
+  font-family: var(--font-body);
+  font-size: 13px;
+  color: var(--ink-soft);
+  display: flex;
+  gap: 8px;
+}
+
+/* --- Vitals strip: a clinical readout row --- */
+
+.vitals-strip {
+  display: flex;
+  border: 1px solid var(--rule-strong);
+  background: var(--paper-raised);
+  margin-bottom: 28px;
+}
+
+.vital {
+  flex: 1;
+  padding: 16px 20px;
+  border-right: 1px solid var(--rule);
+}
+
+.vital:last-child {
+  border-right: none;
+}
+
+.vital-label {
+  font-family: var(--font-body);
+  font-size: 12px;
+  color: var(--ink-soft);
+  margin-bottom: 6px;
+}
+
+.vital-value {
+  font-family: var(--font-data);
+  font-weight: 600;
+  font-size: 28px;
+  line-height: 1;
+  color: var(--ink);
+}
+
+.vital-value.is-alert {
+  color: var(--alert);
+}
+
+/* --- Section heading: a chart-entry marker, not decoration --- */
+
+.section-block {
+  margin-bottom: 24px;
+}
+
+.section-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.section-marker {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.section-marker.marker-alert { background: var(--alert); }
+.section-marker.marker-caution { background: var(--caution); }
+.section-marker.marker-resolved { background: var(--resolved); }
+.section-marker.marker-neutral { background: var(--ink-faint); }
+
+.section-heading h2 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 18px;
+  margin: 0;
+  color: var(--ink);
+}
+
+/* --- The signature: a red-pen mark beside every wrong question --- */
+
+.red-pen-mark {
+  flex-shrink: 0;
+  display: inline-block;
+  overflow: visible;
+}
+
+.red-pen-mark path {
+  fill: none;
+  stroke: var(--alert);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+/* --- Prescription box: 医嘱 — the actionable close of the report --- */
+
+.prescription-box {
+  border: 1px solid var(--ink);
+  padding: 20px;
+  margin-top: 8px;
+  position: relative;
+}
+
+.prescription-stamp {
+  position: absolute;
+  top: -11px;
+  left: 16px;
+  background: var(--paper);
+  padding: 0 8px;
+  font-family: var(--font-data);
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  color: var(--alert);
+  text-transform: uppercase;
+}
+
+/* --- Data emphasis: numerals throughout read as measured, not typeset --- */
+
+.data-figure {
+  font-family: var(--font-data);
+}
