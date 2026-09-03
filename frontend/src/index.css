@@ -6,9 +6,10 @@
   subject's world — a graded exam paper: red-pen corrections, squared exercise-book
   paper, a case number stamped at the top. Two real, adjacent worlds, one visual system.
 
-  Signature element: a red-pen mark (circle/strike) beside every wrong question, and a
-  faint squared-paper grid on the page ground. Everything else stays quiet so that mark
-  reads as the one deliberate flourish, not noise.
+  Signature element: a red-pen mark (circle/strike) beside every wrong question. Everything
+  else stays quiet so that mark reads as the one deliberate flourish, not noise. (A squared
+  exercise-book grid on the page ground was tried here too, but it read as visual noise
+  rather than paper texture — cut per direct feedback, keeping the mark as the sole flourish.)
 */
 
 :root {
@@ -41,13 +42,6 @@ body {
   background: var(--paper);
   color: var(--ink);
   font-family: var(--font-body);
-  /* A hairline squared-exercise-book grid, kept nearly invisible so it reads as paper
-     texture rather than decoration. */
-  background-image:
-    linear-gradient(var(--rule) 1px, transparent 1px),
-    linear-gradient(90deg, var(--rule) 1px, transparent 1px);
-  background-size: 28px 28px;
-  background-position: -1px -1px;
 }
 
 @media (prefers-reduced-motion: no-preference) {
