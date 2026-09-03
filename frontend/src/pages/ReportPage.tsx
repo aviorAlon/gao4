@@ -12,7 +12,8 @@ import {
   submitVerificationAttempt, type AnalysisReport, type MasteryRecord, type ReviewOrderItem,
   type VerificationQuestionEntity, type WrongQuestion,
 } from '../api'
-import './ReportPage.css'
+import { Masthead, RedPenMark, SectionBlock, Vital, VitalsStrip } from '../chart/Chart'
+import '../chart/chart.css'
 
 const { Title, Text, Paragraph } = Typography
 
@@ -28,24 +29,6 @@ const SEVERITY_TO_ALERT_TYPE: Record<string, 'warning' | 'info' | 'error'> = {
 
 function PriorityTag({ priority }: { priority: string }) {
   return <Tag color={PRIORITY_COLOR[priority] ?? 'default'}>{PRIORITY_LABEL[priority] ?? priority}</Tag>
-}
-
-/** The signature element: a red-pen circle, the mark a teacher leaves beside a wrong answer. */
-function RedPenMark() {
-  return (
-    <svg className="red-pen-mark" width="22" height="22" viewBox="0 0 22 22" aria-hidden="true">
-      <path d="M11 2.5 C5 2, 2 6, 2.5 11 C3 16.5, 7 19.5, 11.5 19.3 C17 19, 20 14.5, 19.3 10 C18.7 5.8, 15 2, 11 2.5" />
-    </svg>
-  )
-}
-
-function SectionHeading({ marker, children }: { marker: 'alert' | 'caution' | 'resolved' | 'neutral'; children: React.ReactNode }) {
-  return (
-    <div className="section-heading">
-      <span className={`section-marker marker-${marker}`} />
-      <h2>{children}</h2>
-    </div>
-  )
 }
 
 // Ant Design v6 deprecated the `List` component outright ("will be removed in next major
@@ -66,8 +49,7 @@ function ItemStack({ children }: { children: React.ReactNode[] }) {
 
 function SummaryCard({ summary }: { summary?: string }) {
   return (
-    <div className="section-block">
-      <SectionHeading marker="neutral">诊断意见</SectionHeading>
+    <SectionBlock marker="neutral" title="诊断意见">
       <Card>
         {summary ? (
           <Flex gap="small" align="flex-start">
@@ -80,28 +62,26 @@ function SummaryCard({ summary }: { summary?: string }) {
           </Text>
         )}
       </Card>
-    </div>
+    </SectionBlock>
   )
 }
 
 function QualityFlags({ flags }: { flags: AnalysisReport['quality_flags'] }) {
   if (!flags.length) return null
   return (
-    <div className="section-block">
-      <SectionHeading marker="caution">结论可信度提示</SectionHeading>
+    <SectionBlock marker="caution" title="结论可信度提示">
       <Flex vertical gap="small">
         {flags.map((flag, i) => (
           <Alert key={i} type={SEVERITY_TO_ALERT_TYPE[flag.severity] ?? 'info'} title={flag.message} showIcon />
         ))}
       </Flex>
-    </div>
+    </SectionBlock>
   )
 }
 
 function ScopeCoverageCard({ scope }: { scope: AnalysisReport['scope_coverage'] }) {
   return (
-    <div className="section-block">
-      <SectionHeading marker="neutral">课程范围与资料覆盖范围</SectionHeading>
+    <SectionBlock marker="neutral" title="课程范围与资料覆盖范围">
       <Card>
         <Row gutter={24} align="middle">
           <Col flex="140px">
@@ -127,7 +107,7 @@ function ScopeCoverageCard({ scope }: { scope: AnalysisReport['scope_coverage'] 
           </Col>
         </Row>
       </Card>
-    </div>
+    </SectionBlock>
   )
 }
 
@@ -164,7 +144,7 @@ function ClustersCard({ clusters }: { clusters: AnalysisReport['clusters'] }) {
       />
     </Card>
   )
-  return <div className="section-block"><SectionHeading marker="alert">错因专题</SectionHeading>{body}</div>
+  return <SectionBlock marker="alert" title="错因专题">{body}</SectionBlock>
 }
 
 function KnowledgeTreeCard({ tree }: { tree: AnalysisReport['knowledge_tree'] }) {
@@ -194,14 +174,13 @@ function KnowledgeTreeCard({ tree }: { tree: AnalysisReport['knowledge_tree'] })
       </Flex>
     </Card>
   )
-  return <div className="section-block"><SectionHeading marker="neutral">知识树</SectionHeading>{body}</div>
+  return <SectionBlock marker="neutral" title="知识树">{body}</SectionBlock>
 }
 
 function ReviewOrderCard({ items }: { items: ReviewOrderItem[] }) {
   if (!items.length) return null
   return (
-    <div className="section-block">
-      <SectionHeading marker="caution">复习优先顺序</SectionHeading>
+    <SectionBlock marker="caution" title="复习优先顺序">
       <Card>
         <Table
           rowKey={(r) => `${r.chapter}:${r.name}`}
@@ -217,7 +196,7 @@ function ReviewOrderCard({ items }: { items: ReviewOrderItem[] }) {
           ]}
         />
       </Card>
-    </div>
+    </SectionBlock>
   )
 }
 
@@ -244,7 +223,7 @@ function WrongQuestionsCard({ items }: { items: WrongQuestion[] }) {
       </ItemStack>
     </Card>
   )
-  return <div className="section-block"><SectionHeading marker="alert">错题集</SectionHeading>{body}</div>
+  return <SectionBlock marker="alert" title="错题集">{body}</SectionBlock>
 }
 
 const MASTERY_LABEL: Record<string, string> = {
@@ -391,6 +370,7 @@ function VerificationQuestionsCard({ questions, mastery, onChanged }: {
   )
 }
 
+
 export default function ReportPage() {
   const { runId: routeRunId } = useParams()
   const navigate = useNavigate()
@@ -429,7 +409,7 @@ export default function ReportPage() {
   const wrongPct = report && report.wrong_question_count > 0
 
   return (
-    <div className="report-page">
+    <div className="page-shell">
       <Breadcrumb items={[{ title: <Link to="/">Exam Diagnosis</Link> }, { title: '报告' }]} style={{ marginBottom: 20 }} />
 
       <Space.Compact style={{ maxWidth: 480, marginBottom: 24 }}>
@@ -446,35 +426,26 @@ export default function ReportPage() {
 
       {!loading && !error && report && (
         <>
-          <header className="masthead chart-rise">
-            <div className="masthead-top">
-              <span className="masthead-kicker">Exam Diagnosis · 诊断报告</span>
-              <span className="masthead-case">#{report.analysis_run_id.slice(0, 8)}</span>
-            </div>
-            <h1 className="masthead-title">{examLabel}</h1>
-            <div className="masthead-meta">
-              <span>{report.knowledge_base?.stage === 'high' ? '高中' : report.knowledge_base?.stage}</span>
-              <span>·</span>
-              <span>{report.knowledge_base?.subject}</span>
-              <span>·</span>
-              <span>{report.knowledge_base?.province}</span>
-            </div>
-          </header>
+          <Masthead
+            kicker="Exam Diagnosis · 诊断报告"
+            caseId={`#${report.analysis_run_id.slice(0, 8)}`}
+            title={examLabel}
+            meta={
+              <>
+                <span>{report.knowledge_base?.stage === 'high' ? '高中' : report.knowledge_base?.stage}</span>
+                <span>·</span>
+                <span>{report.knowledge_base?.subject}</span>
+                <span>·</span>
+                <span>{report.knowledge_base?.province}</span>
+              </>
+            }
+          />
 
-          <section className="vitals-strip chart-rise">
-            <div className="vital">
-              <div className="vital-label">题目总数</div>
-              <div className="vital-value">{report.question_count}</div>
-            </div>
-            <div className="vital">
-              <div className="vital-label">错题数</div>
-              <div className={`vital-value${wrongPct ? ' is-alert' : ''}`}>{report.wrong_question_count}</div>
-            </div>
-            <div className="vital">
-              <div className="vital-label">课程覆盖率</div>
-              <div className="vital-value">{Math.round(report.scope_coverage.coverage_ratio * 100)}%</div>
-            </div>
-          </section>
+          <VitalsStrip>
+            <Vital label="题目总数" value={report.question_count} />
+            <Vital label="错题数" value={report.wrong_question_count} tone={wrongPct ? 'alert' : undefined} />
+            <Vital label="课程覆盖率" value={`${Math.round(report.scope_coverage.coverage_ratio * 100)}%`} />
+          </VitalsStrip>
 
           <SummaryCard summary={report.summary} />
           <QualityFlags flags={report.quality_flags} />

@@ -1,4 +1,10 @@
-.report-page {
+/*
+  Shared "diagnostic chart" visual language — see index.css for the design rationale.
+  Used across all four pages so the product reads as one system, not one styled page bolted
+  onto three default ones.
+*/
+
+.page-shell {
   max-width: 880px;
   margin: 0 auto;
   padding: 40px 20px 80px;
@@ -51,6 +57,7 @@
   color: var(--ink-soft);
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 /* --- Vitals strip: a clinical readout row --- */
@@ -60,10 +67,12 @@
   border: 1px solid var(--rule-strong);
   background: var(--paper-raised);
   margin-bottom: 28px;
+  flex-wrap: wrap;
 }
 
 .vital {
   flex: 1;
+  min-width: 120px;
   padding: 16px 20px;
   border-right: 1px solid var(--rule);
 }
@@ -87,9 +96,9 @@
   color: var(--ink);
 }
 
-.vital-value.is-alert {
-  color: var(--alert);
-}
+.vital-value.is-alert { color: var(--alert); }
+.vital-value.is-resolved { color: var(--resolved); }
+.vital-value.is-caution { color: var(--caution); }
 
 /* --- Section heading: a chart-entry marker, not decoration --- */
 
@@ -124,7 +133,7 @@
   color: var(--ink);
 }
 
-/* --- The signature: a red-pen mark beside every wrong question --- */
+/* --- The signature: a red-pen mark beside every wrong question / flagged row --- */
 
 .red-pen-mark {
   flex-shrink: 0;
@@ -139,7 +148,7 @@
   stroke-linecap: round;
 }
 
-/* --- Prescription box: 医嘱 — the actionable close of the report --- */
+/* --- Prescription box: 医嘱 — the actionable close of a chart entry --- */
 
 .prescription-box {
   border: 1px solid var(--ink);
@@ -165,4 +174,11 @@
 
 .data-figure {
   font-family: var(--font-data);
+}
+
+/* --- Case-file row: used for tables/lists that behave like a chart's case list --- */
+
+.case-row-tag {
+  font-family: var(--font-data);
+  font-size: 12px;
 }
