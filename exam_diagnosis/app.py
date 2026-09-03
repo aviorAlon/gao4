@@ -16,6 +16,12 @@ from .knowledge import KnowledgePartitionNotFound, available_partitions, find_pa
 from .review import APPROVED, NEEDS_REVIEW, review_report, withhold_unreviewed_answer
 from .llm import client_from_env
 from .reporting import generate_report_summary
+from .env_file import load_env_file
+
+# Loaded once at import time, before anything below reads os.environ — lets model-role API keys
+# live in a gitignored .env.local file instead of needing `$env:...` set by hand every session.
+# Real environment variables still win if both are set (see env_file.load_env_file).
+load_env_file()
 
 LOCAL_USER_ID = 'local'
 USER_HEADER = 'X-User-Id'

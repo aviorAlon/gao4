@@ -5,6 +5,7 @@ __pycache__/
 venv/
 .env
 .env.*
+!.env.local.example
 data/*.db
 data/*.sqlite
 data/*.sqlite3
