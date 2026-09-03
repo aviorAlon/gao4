@@ -6,7 +6,21 @@
 
 后端只提供 JSON API，不再自带页面（早期版本 `/` 会返回一份内嵌 HTML 的临时界面，已经被下面的独立前端取代并从代码里删掉）。
 
-在仓库根目录启动后端：
+在仓库根目录启动后端。PowerShell（Windows 默认终端）：
+
+```powershell
+$env:PYTHONPATH = "."
+uvicorn exam_diagnosis.app:app --host 127.0.0.1 --port 8765
+```
+
+cmd.exe：
+
+```cmd
+set PYTHONPATH=.
+uvicorn exam_diagnosis.app:app --host 127.0.0.1 --port 8765
+```
+
+bash / git-bash / WSL：
 
 ```bash
 PYTHONPATH=. uvicorn exam_diagnosis.app:app --host 127.0.0.1 --port 8765
@@ -21,6 +35,22 @@ npm --prefix frontend run dev
 浏览器打开：`http://localhost:5173/`
 
 ## 测试
+
+PowerShell：
+
+```powershell
+$env:PYTHONPATH = "."
+pytest -q
+```
+
+cmd.exe：
+
+```cmd
+set PYTHONPATH=.
+pytest -q
+```
+
+bash / git-bash / WSL：
 
 ```bash
 PYTHONPATH=. pytest -q
