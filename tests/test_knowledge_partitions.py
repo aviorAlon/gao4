@@ -126,12 +126,6 @@ def test_api_lists_partitions_and_rejects_submission_outside_them():
     assert body['requested']['stage'] == 'middle' and body['available_partitions']
 
 
-def test_home_offers_only_registered_partitions_instead_of_hardcoded_stages():
-    html = TestClient(app).get('/').text
-    assert 'partition-select' in html and '/api/knowledge-partitions' in html
-    assert '<option value="middle">' not in html and '<option value="primary">' not in html
-
-
 def test_submission_report_and_export_record_the_partition_they_used():
     client = TestClient(app)
     submission = client.post('/api/submissions', json={'stage': 'high', 'subject': '数学', 'province': '广东', 'school_grade': '高二', 'academic_year_label': '25-26'}).json()

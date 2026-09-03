@@ -1,12 +1,4 @@
-from fastapi.testclient import TestClient
-from exam_diagnosis.app import app
 from exam_diagnosis.reporting import render_html
-
-
-def test_ui_supports_recovery_lists_multi_upload_manual_question_and_export_links():
-    html = TestClient(app).get('/').text
-    for marker in ('/api/submissions', 'multiple', 'upload-progress', 'manual-question', 'original-source', 'export?format=md', 'export?format=html'):
-        assert marker in html
 
 
 def test_report_html_uses_semantic_sections_and_escapes_values():

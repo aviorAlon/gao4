@@ -4,13 +4,21 @@
 
 ## 启动
 
-在仓库根目录执行：
+后端只提供 JSON API，不再自带页面（早期版本 `/` 会返回一份内嵌 HTML 的临时界面，已经被下面的独立前端取代并从代码里删掉）。
+
+在仓库根目录启动后端：
 
 ```bash
 PYTHONPATH=. uvicorn exam_diagnosis.app:app --host 127.0.0.1 --port 8765
 ```
 
-浏览器打开：`http://127.0.0.1:8765/`
+再启动前端（`frontend/` 是独立的 React + Vite 项目，第一次要先 `npm install`）：
+
+```bash
+npm --prefix frontend run dev
+```
+
+浏览器打开：`http://localhost:5173/`
 
 ## 测试
 
@@ -77,7 +85,7 @@ PYTHONPATH=. pytest -q
 
 ## 页面与得分编辑
 
-- 首页“解析确认”里可以直接改页序、材料类型、是否计入解析统计，对应 `PATCH /api/pages/{page_id}`。
+- 考试详情页“页面与材料”里可以直接改材料类型、是否计入解析统计，对应 `PATCH /api/pages/{page_id}`。
 - 考试确认后出现“得分与批改”列表，可以填每题得分、满分和教师批注，对应 `PATCH /api/question-records/{record_id}`，失分自动计算。
 
 ## 验证题答案复核门禁

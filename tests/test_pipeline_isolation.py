@@ -38,7 +38,6 @@ def test_only_registered_stages_can_be_chosen_at_all():
     for stage in ('primary', 'middle', 'university', ''):
         rejected = client.post('/api/submissions', json={**PAYLOAD, 'stage': stage})
         assert rejected.status_code == 422
-    assert '<option value="high">' not in client.get('/').text
 
 
 def test_two_upload_sessions_on_the_same_exam_keep_their_assets_apart():
