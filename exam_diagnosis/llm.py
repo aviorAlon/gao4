@@ -6,7 +6,7 @@ be reported as a success. Callers get ``None`` back and are expected to fall
 back to their deterministic rule-based path — the same rule that keeps OCR
 from claiming a fake success when no vision parser is configured.
 
-Three roles are defined today:
+Four roles are defined today:
 
 - ``analysis``: root-cause diagnosis of a wrong question. Needs real math
   reasoning, defaults to ``deepseek-v4-pro`` (thinking mode).
@@ -16,6 +16,10 @@ Three roles are defined today:
   Real exam papers use too many incompatible numbering conventions for a
   fixed regex to cover reliably; this is a light classification-shaped task,
   so it also defaults to ``deepseek-v4-flash``.
+- ``verify``: generating one real variant practice question (with a fully
+  worked reference answer) per error cluster. Getting both the problem and
+  its solution right needs the same reasoning tier as ``analysis``, so it
+  also defaults to ``deepseek-v4-pro``.
 
 Every role is opt-in and independently configurable via environment
 variables, e.g. for ``analysis``:
@@ -45,6 +49,7 @@ ROLE_DEFAULTS = {
     'analysis': {'base_url': DEEPSEEK_BASE_URL, 'model': 'deepseek-v4-pro'},
     'report': {'base_url': DEEPSEEK_BASE_URL, 'model': 'deepseek-v4-flash'},
     'split': {'base_url': DEEPSEEK_BASE_URL, 'model': 'deepseek-v4-flash'},
+    'verify': {'base_url': DEEPSEEK_BASE_URL, 'model': 'deepseek-v4-pro'},
 }
 
 

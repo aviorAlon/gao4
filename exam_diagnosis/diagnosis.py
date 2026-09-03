@@ -40,6 +40,34 @@ def _model_diagnose(client: Any, record: dict[str, Any]) -> dict[str, Any] | Non
     return {'root_cause': root_cause, 'explanation': explanation, 'avoidance_advice': advice, 'model_generated': True}
 
 
+def _model_generate_verification(client: Any, cluster: dict[str, Any]) -> dict[str, Any] | None:
+    """Ask the verify-role model for one real variant question targeting this error cluster,
+    with a fully worked reference answer — replacing the fixed template sentence this function's
+    caller otherwise falls back to. None on any failure, same never-fake-success rule as every
+    other model integration here: a generated question is only ever used if it's real."""
+    system = (
+        '你是高中数学教师，要针对学生的一类错误专题出一道变式练习题，帮助巩固这个知识点、避免同类错误。'
+        '题目必须是一道完整、可解的数学题，难度和考察点要跟给出的错因专题匹配，不能与原错题一字不差；'
+        '给出完整、正确的参考答案，写清关键步骤；不要编造材料里没有的信息。'
+        '严格只返回 JSON，不要输出其它文字：{"question_text": 完整题干, "answer": 完整参考答案（含关键步骤）}'
+    )
+    user = json.dumps({
+        'knowledge_id': cluster['knowledge_id'],
+        'root_cause': cluster['root_cause'],
+        'source_questions': [
+            {'question_text': ex.get('question_text', ''), 'student_answer': ex.get('student_answer', '')}
+            for ex in cluster.get('question_examples', [])
+        ],
+    }, ensure_ascii=False)
+    result = client.complete_json(system, user)
+    if not isinstance(result, dict):
+        return None
+    question_text, answer = result.get('question_text'), result.get('answer')
+    if not isinstance(question_text, str) or not question_text.strip() or not isinstance(answer, str) or not answer.strip():
+        return None
+    return {'question_text': question_text.strip(), 'answer': answer.strip()}
+
+
 def _resolve_cause(client: Any, record: dict[str, Any], cache: dict[str, dict[str, Any]]) -> dict[str, Any]:
     rid = record['id']
     if rid in cache:
@@ -63,11 +91,13 @@ def review_priority(question_count: int, wrong_count: int) -> str:
     return 'low'
 
 
-def diagnose_records(records: list[dict[str, Any]], client: Any = None) -> dict[str, Any]:
+def diagnose_records(records: list[dict[str, Any]], client: Any = None, verify_client: Any = None) -> dict[str, Any]:
     """`client`, when given, is a llm.ChatClient bound to the 'analysis' role: it upgrades
     root-cause classification from keyword matching to real model reasoning, per wrong question,
-    with results cached by record id. Left as None (default) the behavior is byte-for-byte the
-    same as the rule-based baseline — every existing caller keeps working without it."""
+    with results cached by record id. `verify_client`, bound to the 'verify' role, upgrades each
+    error cluster's verification question from a fixed template sentence to a real generated
+    variant problem with a worked answer. Both left as None (default), behavior is byte-for-byte
+    the same as the rule-based baseline — every existing caller keeps working without them."""
     wrong = [record for record in records if record.get('is_wrong_question')]
     diag_cache: dict[str, dict[str, Any]] = {}
     causes = Counter()
@@ -107,10 +137,19 @@ def diagnose_records(records: list[dict[str, Any]], client: Any = None) -> dict[
             node['priority_score'] = round(node['wrong_count'] * node['error_rate'], 4)
             review_order.append({'chapter': chapter, 'name': name, **node})
     review_order.sort(key=lambda item: (-item['priority_score'], -item['wrong_count'], item['chapter'], item['name']))
-    verification = [
-        {'knowledge_id': cluster['knowledge_id'], 'question_text': f"针对知识点 {cluster['knowledge_id']}，完成一道变式题并说明关键步骤。", 'answer': f"围绕 {cluster['knowledge_id']} 的定义、条件和计算步骤逐项作答。", 'target_error': cluster['root_cause'], 'source_question_ids': cluster['question_ids']}
-        for cluster in clusters
-    ]
+    verification = []
+    for cluster in clusters:
+        generated = _model_generate_verification(verify_client, cluster) if verify_client is not None else None
+        if generated is None:
+            generated = {
+                'question_text': f"针对知识点 {cluster['knowledge_id']}，完成一道变式题并说明关键步骤。",
+                'answer': f"围绕 {cluster['knowledge_id']} 的定义、条件和计算步骤逐项作答。",
+            }
+        verification.append({
+            'knowledge_id': cluster['knowledge_id'], 'question_text': generated['question_text'],
+            'answer': generated['answer'], 'target_error': cluster['root_cause'],
+            'source_question_ids': cluster['question_ids'],
+        })
     wrong_collection = []
     for record in wrong:
         diag = _resolve_cause(client, record, diag_cache)

@@ -902,7 +902,8 @@ def get_analysis_report(rid: str):
         'source_question_ids': [record['id'] for record in records],
     }
     analysis_client = client_from_env('analysis', on_call=record_model_call(run.get('user_id'), run_id=rid))
-    report.update(diagnose_records(records, client=analysis_client))
+    verify_client = client_from_env('verify', on_call=record_model_call(run.get('user_id'), run_id=rid))
+    report.update(diagnose_records(records, client=analysis_client, verify_client=verify_client))
     report['review'] = review_report(report, partition)
     if report['review']['status'] != APPROVED:
         report['quality_flags'].append({'code': 'review_pending', 'severity': 'warning', 'detail': [item['code'] for item in report['review']['findings']], 'message': f"独立审查发现 {len(report['review']['findings'])} 处问题，{report['review']['pending_verification_questions']} 道验证题的参考答案在复核通过前不会展示"})

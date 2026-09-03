@@ -47,3 +47,31 @@ def test_no_client_keeps_original_keyword_behavior():
     records = [{**RECORD, 'correction': {'teacher_comment': '漏写分母不为零'}}]
     result = diagnose_records(records)
     assert result['root_cause_counts'] == {'条件遗漏': 1}
+
+
+def test_verify_client_generates_a_real_variant_question():
+    verify_client = FakeClient([{'question_text': '已知f(x)=1/(x-2)，求其定义域。', 'answer': '需要 x-2≠0，故定义域为 x≠2，即 (-∞,2)∪(2,+∞)。'}])
+    result = diagnose_records([RECORD], verify_client=verify_client)
+    q = result['verification_questions'][0]
+    assert q['question_text'] == '已知f(x)=1/(x-2)，求其定义域。'
+    assert q['answer'].startswith('需要 x-2≠0')
+    assert len(verify_client.calls) == 1
+
+
+def test_verify_falls_back_to_template_when_client_returns_none():
+    result = diagnose_records([RECORD], verify_client=FakeClient([None]))
+    q = result['verification_questions'][0]
+    assert q['question_text'] == "针对知识点 k.domain，完成一道变式题并说明关键步骤。"
+
+
+def test_verify_falls_back_to_template_when_response_missing_fields():
+    result = diagnose_records([RECORD], verify_client=FakeClient([{'question_text': '', 'answer': 'x'}]))
+    q = result['verification_questions'][0]
+    assert q['question_text'] == "针对知识点 k.domain，完成一道变式题并说明关键步骤。"
+
+
+def test_no_verify_client_keeps_template_behavior():
+    result = diagnose_records([RECORD])
+    q = result['verification_questions'][0]
+    assert q['question_text'] == "针对知识点 k.domain，完成一道变式题并说明关键步骤。"
+    assert q['answer'] == "围绕 k.domain 的定义、条件和计算步骤逐项作答。"

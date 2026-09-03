@@ -44,3 +44,12 @@ def test_split_role_defaults_to_cheaper_model(monkeypatch):
     monkeypatch.delenv('EXAM_DIAGNOSIS_SPLIT_MODEL', raising=False)
     client = client_from_env('split')
     assert client.model == 'deepseek-v4-flash'
+
+
+def test_verify_role_defaults_to_the_reasoning_tier_model(monkeypatch):
+    # Generating a correct worked answer needs the same reasoning tier as root-cause diagnosis —
+    # unlike split/report, this one shouldn't default to the cheaper model.
+    monkeypatch.setenv('EXAM_DIAGNOSIS_VERIFY_API_KEY', 'sk-test')
+    monkeypatch.delenv('EXAM_DIAGNOSIS_VERIFY_MODEL', raising=False)
+    client = client_from_env('verify')
+    assert client.model == 'deepseek-v4-pro'
