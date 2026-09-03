@@ -63,3 +63,15 @@ class SQLiteMapping(MutableMapping[str, dict[str, Any]]):
         with self._connect() as conn:
             for key, value in self._cache.items():
                 conn.execute("INSERT OR REPLACE INTO state(bucket,key,value) VALUES (?,?,?)", (self.name, key, json.dumps(value, ensure_ascii=False)))
+
+    def repoint(self, path: str | Path) -> None:
+        """Redirect this mapping at a different sqlite file, dropping any in-memory cache from the
+        old one. Exists so tests can point every mapping at an isolated file instead of `clear()`
+        being the only reset available — `clear()` alone, with the default relative path, means
+        test runs and a locally running dev server both resolve to the same file when launched
+        from the same working directory, and a test suite wiping "its own" state wipes real data."""
+        self.path = Path(path).resolve()
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._cache.clear()
+        with self._connect() as conn:
+            conn.execute("CREATE TABLE IF NOT EXISTS state (bucket TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(bucket, key))")
