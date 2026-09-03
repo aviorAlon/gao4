@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
   Alert, Breadcrumb, Button, Card, Collapse, Descriptions, Divider, Empty, Flex, Input, InputNumber, Progress,
-  Result, Space, Spin, Statistic, Table, Tag, Typography, Row, Col, message,
+  Result, Space, Spin, Table, Tag, Typography, Row, Col, message,
 } from 'antd'
 import {
   BulbOutlined, CheckCircleOutlined, ExclamationCircleOutlined,
@@ -12,6 +12,8 @@ import {
   submitVerificationAttempt, type AnalysisReport, type MasteryRecord, type ReviewOrderItem,
   type VerificationQuestionEntity, type WrongQuestion,
 } from '../api'
+import { Masthead, RedPenMark, SectionBlock, Vital, VitalsStrip } from '../chart/Chart'
+import '../chart/chart.css'
 
 const { Title, Text, Paragraph } = Typography
 
@@ -46,115 +48,122 @@ function ItemStack({ children }: { children: React.ReactNode[] }) {
 }
 
 function SummaryCard({ summary }: { summary?: string }) {
-  if (summary) {
-    return (
-      <Card>
-        <Flex gap="small" align="flex-start">
-          <BulbOutlined style={{ fontSize: 20, color: '#faad14', marginTop: 4 }} />
-          <Paragraph style={{ marginBottom: 0, fontSize: 15 }}>{summary}</Paragraph>
-        </Flex>
-      </Card>
-    )
-  }
   return (
-    <Card>
-      <Text type="secondary">
-        本次报告没有生成模型概述（<code>report</code> 角色未配置或调用失败），以下内容均来自结构化统计。
-      </Text>
-    </Card>
+    <SectionBlock marker="neutral" title="诊断意见">
+      <Card>
+        {summary ? (
+          <Flex gap="small" align="flex-start">
+            <BulbOutlined style={{ fontSize: 20, color: 'var(--caution)', marginTop: 4 }} />
+            <Paragraph style={{ marginBottom: 0, fontSize: 15 }}>{summary}</Paragraph>
+          </Flex>
+        ) : (
+          <Text type="secondary">
+            本次报告没有生成模型概述（<code>report</code> 角色未配置或调用失败），以下内容均来自结构化统计。
+          </Text>
+        )}
+      </Card>
+    </SectionBlock>
   )
 }
 
 function QualityFlags({ flags }: { flags: AnalysisReport['quality_flags'] }) {
   if (!flags.length) return null
   return (
-    <Card title="结论可信度提示">
+    <SectionBlock marker="caution" title="结论可信度提示">
       <Flex vertical gap="small">
         {flags.map((flag, i) => (
           <Alert key={i} type={SEVERITY_TO_ALERT_TYPE[flag.severity] ?? 'info'} title={flag.message} showIcon />
         ))}
       </Flex>
-    </Card>
+    </SectionBlock>
   )
 }
 
 function ScopeCoverageCard({ scope }: { scope: AnalysisReport['scope_coverage'] }) {
   return (
-    <Card title="课程范围与资料覆盖范围">
-      <Row gutter={24} align="middle">
-        <Col flex="140px">
-          <Progress
-            type="circle" size={110}
-            percent={Math.round(scope.coverage_ratio * 100)}
-            format={(p) => `${p}%`}
-          />
-        </Col>
-        <Col flex="auto">
-          <Descriptions column={1} size="small">
-            <Descriptions.Item label="课程范围知识点">{scope.curriculum_point_count}</Descriptions.Item>
-            <Descriptions.Item label="本次资料考查到">{scope.assessed_point_count}</Descriptions.Item>
-            <Descriptions.Item label="本次资料未考查">{scope.not_assessed_point_count}</Descriptions.Item>
-            <Descriptions.Item label="未考查章节">
-              {scope.not_assessed_chapters.length
-                ? scope.not_assessed_chapters.map((c) => <Tag key={c}>{c}</Tag>)
-                : <Text type="secondary">无</Text>}
-            </Descriptions.Item>
-          </Descriptions>
-          <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>{scope.note}</Paragraph>
-        </Col>
-      </Row>
-    </Card>
+    <SectionBlock marker="neutral" title="课程范围与资料覆盖范围">
+      <Card>
+        <Row gutter={24} align="middle">
+          <Col flex="140px">
+            <Progress
+              type="circle" size={110}
+              percent={Math.round(scope.coverage_ratio * 100)}
+              format={(p) => <span className="data-figure">{p}%</span>}
+              strokeColor="var(--ink)"
+            />
+          </Col>
+          <Col flex="auto">
+            <Descriptions column={1} size="small">
+              <Descriptions.Item label="课程范围知识点"><span className="data-figure">{scope.curriculum_point_count}</span></Descriptions.Item>
+              <Descriptions.Item label="本次资料考查到"><span className="data-figure">{scope.assessed_point_count}</span></Descriptions.Item>
+              <Descriptions.Item label="本次资料未考查"><span className="data-figure">{scope.not_assessed_point_count}</span></Descriptions.Item>
+              <Descriptions.Item label="未考查章节">
+                {scope.not_assessed_chapters.length
+                  ? scope.not_assessed_chapters.map((c) => <Tag key={c}>{c}</Tag>)
+                  : <Text type="secondary">无</Text>}
+              </Descriptions.Item>
+            </Descriptions>
+            <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>{scope.note}</Paragraph>
+          </Col>
+        </Row>
+      </Card>
+    </SectionBlock>
   )
 }
 
 function ClustersCard({ clusters }: { clusters: AnalysisReport['clusters'] }) {
-  if (!clusters.length) {
-    return <Card title="错因专题"><Empty description="暂无错题，没有可分析的错因专题" /></Card>
-  }
-  const items = clusters.map((cluster) => ({
-    key: cluster.cluster_id,
-    label: (
-      <Space>
-        <Text strong>{cluster.root_cause}</Text>
-        <Tag color="volcano">优先级 {cluster.priority}</Tag>
-        <Text type="secondary">出现 {cluster.occurrence_count} 次</Text>
-      </Space>
-    ),
-    children: (
-      <>
-        <Paragraph><Text strong>规避建议：</Text>{cluster.avoidance_advice}</Paragraph>
-        <ItemStack>
-          {cluster.question_examples.map((ex) => (
-            <Flex vertical gap={0} key={ex.question_id}>
-              <Text>{ex.question_text || '（题干未记录）'}</Text>
-              {ex.student_answer && <Text type="secondary">学生作答：{ex.student_answer}</Text>}
-            </Flex>
-          ))}
-        </ItemStack>
-      </>
-    ),
-  }))
-  return <Card title="错因专题"><Collapse items={items} /></Card>
+  const body = !clusters.length ? (
+    <Card><Empty description="暂无错题，没有可分析的错因专题" /></Card>
+  ) : (
+    <Card>
+      <Collapse
+        items={clusters.map((cluster) => ({
+          key: cluster.cluster_id,
+          label: (
+            <Space>
+              <RedPenMark />
+              <Text strong>{cluster.root_cause}</Text>
+              <Tag color="volcano">优先级 {cluster.priority}</Tag>
+              <Text type="secondary">出现 {cluster.occurrence_count} 次</Text>
+            </Space>
+          ),
+          children: (
+            <>
+              <Paragraph><Text strong>规避建议：</Text>{cluster.avoidance_advice}</Paragraph>
+              <ItemStack>
+                {cluster.question_examples.map((ex) => (
+                  <Flex vertical gap={0} key={ex.question_id}>
+                    <Text>{ex.question_text || '（题干未记录）'}</Text>
+                    {ex.student_answer && <Text type="secondary">学生作答：{ex.student_answer}</Text>}
+                  </Flex>
+                ))}
+              </ItemStack>
+            </>
+          ),
+        }))}
+      />
+    </Card>
+  )
+  return <SectionBlock marker="alert" title="错因专题">{body}</SectionBlock>
 }
 
 function KnowledgeTreeCard({ tree }: { tree: AnalysisReport['knowledge_tree'] }) {
   const chapters = Object.entries(tree)
-  if (!chapters.length) {
-    return <Card title="知识树"><Empty description="暂无知识点数据" /></Card>
-  }
-  return (
-    <Card title="知识树">
+  const body = !chapters.length ? (
+    <Card><Empty description="暂无知识点数据" /></Card>
+  ) : (
+    <Card>
       <Flex vertical gap="large">
         {chapters.map(([chapter, points]) => (
           <div key={chapter}>
-            <Title level={5}>{chapter}</Title>
+            <Title level={5} style={{ fontFamily: 'var(--font-display)' }}>{chapter}</Title>
             <ItemStack>
               {Object.entries(points).map(([name, stats]) => (
                 <Flex justify="space-between" wrap key={name}>
                   <Text>{name}</Text>
                   <Space>
-                    <Text type="secondary">错题 {stats.wrong_count}/{stats.question_count}</Text>
-                    <Text type="secondary">错误率 {(stats.error_rate * 100).toFixed(0)}%</Text>
+                    <Text type="secondary" className="data-figure">{stats.wrong_count}/{stats.question_count}</Text>
+                    <Text type="secondary" className="data-figure">{(stats.error_rate * 100).toFixed(0)}%</Text>
                     <PriorityTag priority={stats.review_priority} />
                   </Space>
                 </Flex>
@@ -165,50 +174,56 @@ function KnowledgeTreeCard({ tree }: { tree: AnalysisReport['knowledge_tree'] })
       </Flex>
     </Card>
   )
+  return <SectionBlock marker="neutral" title="知识树">{body}</SectionBlock>
 }
 
 function ReviewOrderCard({ items }: { items: ReviewOrderItem[] }) {
   if (!items.length) return null
   return (
-    <Card title="复习优先顺序">
-      <Table
-        rowKey={(r) => `${r.chapter}:${r.name}`}
-        size="small"
-        pagination={false}
-        dataSource={items}
-        columns={[
-          { title: '#', render: (_, __, i) => i + 1, width: 48 },
-          { title: '章节', dataIndex: 'chapter' },
-          { title: '知识点', dataIndex: 'name' },
-          { title: '错题', render: (_, r: ReviewOrderItem) => `${r.wrong_count}/${r.question_count}` },
-          { title: '优先级', render: (_, r: ReviewOrderItem) => <PriorityTag priority={r.review_priority} /> },
-        ]}
-      />
-    </Card>
+    <SectionBlock marker="caution" title="复习优先顺序">
+      <Card>
+        <Table
+          rowKey={(r) => `${r.chapter}:${r.name}`}
+          size="small"
+          pagination={false}
+          dataSource={items}
+          columns={[
+            { title: '#', render: (_, __, i) => <span className="data-figure">{i + 1}</span>, width: 48 },
+            { title: '章节', dataIndex: 'chapter' },
+            { title: '知识点', dataIndex: 'name' },
+            { title: '错题', render: (_, r: ReviewOrderItem) => <span className="data-figure">{r.wrong_count}/{r.question_count}</span> },
+            { title: '优先级', render: (_, r: ReviewOrderItem) => <PriorityTag priority={r.review_priority} /> },
+          ]}
+        />
+      </Card>
+    </SectionBlock>
   )
 }
 
 function WrongQuestionsCard({ items }: { items: WrongQuestion[] }) {
-  if (!items.length) {
-    return <Card title="错题集"><Empty description="暂无错题" /></Card>
-  }
-  return (
-    <Card title="错题集">
+  const body = !items.length ? (
+    <Card><Empty description="暂无错题" /></Card>
+  ) : (
+    <Card>
       <ItemStack>
         {items.map((q) => (
-          <Flex vertical gap={4} key={q.question_id}>
-            <Text>{q.question_text || '（题干未记录）'}</Text>
-            {q.student_answer && <Text type="secondary">学生作答：{q.student_answer}</Text>}
-            <Space wrap>
-              <Tag color="red">{q.root_cause}</Tag>
-              {q.explanation && <Text type="secondary">{q.explanation}</Text>}
-            </Space>
-            <Text type="secondary">规避建议：{q.avoidance_advice}</Text>
+          <Flex gap={10} key={q.question_id}>
+            <RedPenMark />
+            <Flex vertical gap={4} style={{ flex: 1 }}>
+              <Text>{q.question_text || '（题干未记录）'}</Text>
+              {q.student_answer && <Text type="secondary">学生作答：{q.student_answer}</Text>}
+              <Space wrap>
+                <Tag color="red">{q.root_cause}</Tag>
+                {q.explanation && <Text type="secondary">{q.explanation}</Text>}
+              </Space>
+              <Text type="secondary">规避建议：{q.avoidance_advice}</Text>
+            </Flex>
           </Flex>
         ))}
       </ItemStack>
     </Card>
   )
+  return <SectionBlock marker="alert" title="错题集">{body}</SectionBlock>
 }
 
 const MASTERY_LABEL: Record<string, string> = {
@@ -342,15 +357,19 @@ function VerificationQuestionsCard({ questions, mastery, onChanged }: {
   const masteryFor = (q: VerificationQuestionEntity) =>
     mastery.find((m) => m.knowledge_id === q.knowledge_id && m.error_cluster === q.target_error)
   return (
-    <Card title="验证题">
-      <ItemStack>
-        {questions.map((q) => (
-          <VerificationQuestionItem key={q.id} question={q} mastery={masteryFor(q)} onChanged={onChanged} />
-        ))}
-      </ItemStack>
-    </Card>
+    <div className="section-block">
+      <div className="prescription-box">
+        <span className="prescription-stamp">医嘱 · 验证题</span>
+        <ItemStack>
+          {questions.map((q) => (
+            <VerificationQuestionItem key={q.id} question={q} mastery={masteryFor(q)} onChanged={onChanged} />
+          ))}
+        </ItemStack>
+      </div>
+    </div>
   )
 }
+
 
 export default function ReportPage() {
   const { runId: routeRunId } = useParams()
@@ -386,12 +405,14 @@ export default function ReportPage() {
     reloadVerification()
   }, [runId])
 
-  return (
-    <Flex vertical gap="large" style={{ maxWidth: 900, margin: '0 auto', padding: '24px 16px' }}>
-      <Breadcrumb items={[{ title: <Link to="/">Exam Diagnosis</Link> }, { title: '报告' }]} />
-      <Title level={2} style={{ marginBottom: 0 }}>Exam Diagnosis 报告</Title>
+  const examLabel = report?.exam_versions?.map((e) => `${e.name} v${e.version}`).join('；') || '未命名考试'
+  const wrongPct = report && report.wrong_question_count > 0
 
-      <Space.Compact style={{ maxWidth: 480 }}>
+  return (
+    <div className="page-shell">
+      <Breadcrumb items={[{ title: <Link to="/">Exam Diagnosis</Link> }, { title: '报告' }]} style={{ marginBottom: 20 }} />
+
+      <Space.Compact style={{ maxWidth: 480, marginBottom: 24 }}>
         <Input
           placeholder="粘贴 analysis_run_id"
           value={inputValue}
@@ -405,18 +426,26 @@ export default function ReportPage() {
 
       {!loading && !error && report && (
         <>
-          <Row gutter={16}>
-            <Col span={8}><Card><Statistic title="题目总数" value={report.question_count} /></Card></Col>
-            <Col span={8}>
-              <Card>
-                <Statistic
-                  title="错题数" value={report.wrong_question_count}
-                  styles={report.wrong_question_count ? { content: { color: '#cf1322' } } : undefined}
-                />
-              </Card>
-            </Col>
-            <Col span={8}><Card><Statistic title="课程覆盖率" value={Math.round(report.scope_coverage.coverage_ratio * 100)} suffix="%" /></Card></Col>
-          </Row>
+          <Masthead
+            kicker="Exam Diagnosis · 诊断报告"
+            caseId={`#${report.analysis_run_id.slice(0, 8)}`}
+            title={examLabel}
+            meta={
+              <>
+                <span>{report.knowledge_base?.stage === 'high' ? '高中' : report.knowledge_base?.stage}</span>
+                <span>·</span>
+                <span>{report.knowledge_base?.subject}</span>
+                <span>·</span>
+                <span>{report.knowledge_base?.province}</span>
+              </>
+            }
+          />
+
+          <VitalsStrip>
+            <Vital label="题目总数" value={report.question_count} />
+            <Vital label="错题数" value={report.wrong_question_count} tone={wrongPct ? 'alert' : undefined} />
+            <Vital label="课程覆盖率" value={`${Math.round(report.scope_coverage.coverage_ratio * 100)}%`} />
+          </VitalsStrip>
 
           <SummaryCard summary={report.summary} />
           <QualityFlags flags={report.quality_flags} />
@@ -427,6 +456,7 @@ export default function ReportPage() {
           <WrongQuestionsCard items={report.wrong_question_collection} />
           <VerificationQuestionsCard questions={verificationQuestions} mastery={mastery} onChanged={reloadVerification} />
 
+          <Divider />
           <Space>
             <a href={`${API_BASE}/api/reports/${report.analysis_run_id}/export?format=md`}>导出 Markdown</a>
             <a href={`${API_BASE}/api/reports/${report.analysis_run_id}/export?format=html`}>导出 HTML</a>
@@ -437,6 +467,6 @@ export default function ReportPage() {
       {!loading && !error && !report && !runId && (
         <Empty description="在上方输入 analysis_run_id 查看报告" />
       )}
-    </Flex>
+    </div>
   )
 }

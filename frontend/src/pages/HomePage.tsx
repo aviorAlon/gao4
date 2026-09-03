@@ -1,15 +1,15 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  Button, Card, Empty, Flex, Form, Popconfirm, Select, Spin, Table, Tag, Typography, message,
+  Button, Card, Empty, Form, Popconfirm, Select, Spin, Table, Tag, message,
 } from 'antd'
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons'
 import {
   createSubmission, deleteSubmission, listKnowledgePartitions, listSubmissions,
   type KnowledgePartition, type Submission,
 } from '../api'
-
-const { Title } = Typography
+import { Masthead, SectionBlock } from '../chart/Chart'
+import '../chart/chart.css'
 
 const STAGE_LABEL: Record<string, string> = { primary: '小学', middle: '初中', high: '高中' }
 
@@ -66,60 +66,68 @@ export default function HomePage() {
   const gradeOptions = selectedPartition?.academic_year_range.map((g) => ({ value: g, label: g })) ?? []
 
   return (
-    <Flex vertical gap="large" style={{ maxWidth: 900, margin: '0 auto', padding: '24px 16px' }}>
-      <Title level={2} style={{ marginBottom: 0 }}>Exam Diagnosis</Title>
+    <div className="page-shell">
+      <Masthead
+        kicker="Exam Diagnosis · 诊断台"
+        title="Exam Diagnosis"
+        meta={<span>{submissions.length ? `${submissions.length} 个任务在案` : '还没有任务'}</span>}
+      />
 
-      <Card title="创建诊断任务">
-        <Form form={form} layout="inline" onFinish={onCreate} disabled={creating}>
-          <Form.Item name="partitionKey" label="知识库分区" rules={[{ required: true, message: '请选择知识库分区' }]}>
-            <Select
-              style={{ minWidth: 260 }}
-              placeholder="阶段 / 科目 / 省份"
-              options={partitions.map((p) => ({
-                value: partitionKey(p),
-                label: `${STAGE_LABEL[p.stage] ?? p.stage} / ${p.subject} / ${p.province} · 课标${p.curriculum_year}`,
-              }))}
+      <SectionBlock marker="neutral" title="创建诊断任务">
+        <Card>
+          <Form form={form} layout="inline" onFinish={onCreate} disabled={creating}>
+            <Form.Item name="partitionKey" label="知识库分区" rules={[{ required: true, message: '请选择知识库分区' }]}>
+              <Select
+                style={{ minWidth: 260 }}
+                placeholder="阶段 / 科目 / 省份"
+                options={partitions.map((p) => ({
+                  value: partitionKey(p),
+                  label: `${STAGE_LABEL[p.stage] ?? p.stage} / ${p.subject} / ${p.province} · 课标${p.curriculum_year}`,
+                }))}
+              />
+            </Form.Item>
+            <Form.Item name="school_grade" label="年级" rules={[{ required: true, message: '请选择年级' }]}>
+              <Select style={{ minWidth: 120 }} placeholder="年级" options={gradeOptions} disabled={!selectedPartition} />
+            </Form.Item>
+            <Form.Item name="academic_year_label" label="学年" rules={[{ required: true, message: '如 25-26' }]} initialValue="25-26">
+              <Select style={{ minWidth: 100 }} options={[{ value: '25-26', label: '25-26' }, { value: '26-27', label: '26-27' }]} />
+            </Form.Item>
+            <Form.Item>
+              <Button type="primary" htmlType="submit" icon={<PlusOutlined />} loading={creating}>创建任务</Button>
+            </Form.Item>
+          </Form>
+        </Card>
+      </SectionBlock>
+
+      <SectionBlock marker="neutral" title="已有任务">
+        <Card>
+          {loading ? <Spin /> : submissions.length === 0 ? (
+            <Empty description="还没有任务" />
+          ) : (
+            <Table
+              rowKey="id"
+              dataSource={submissions}
+              pagination={false}
+              onRow={(r) => ({ onClick: () => navigate(`/submissions/${r.id}`), style: { cursor: 'pointer' } })}
+              columns={[
+                { title: '阶段/科目/省份', render: (_, s: Submission) => `${STAGE_LABEL[s.stage] ?? s.stage} / ${s.subject} / ${s.province}` },
+                { title: '年级', dataIndex: 'school_grade' },
+                { title: '学年', dataIndex: 'academic_year_label' },
+                { title: '考试数', render: (_, s: Submission) => <span className="data-figure">{s.exam_count}/{s.max_exam_count}</span> },
+                { title: '状态', render: (_, s: Submission) => <Tag className="case-row-tag">{s.status}</Tag> },
+                {
+                  title: '', width: 48,
+                  render: (_, s: Submission) => (
+                    <Popconfirm title="确认删除这个任务？" onConfirm={(e) => { e?.stopPropagation(); onDelete(s.id) }} onCancel={(e) => e?.stopPropagation()}>
+                      <Button danger type="text" icon={<DeleteOutlined />} onClick={(e) => e.stopPropagation()} />
+                    </Popconfirm>
+                  ),
+                },
+              ]}
             />
-          </Form.Item>
-          <Form.Item name="school_grade" label="年级" rules={[{ required: true, message: '请选择年级' }]}>
-            <Select style={{ minWidth: 120 }} placeholder="年级" options={gradeOptions} disabled={!selectedPartition} />
-          </Form.Item>
-          <Form.Item name="academic_year_label" label="学年" rules={[{ required: true, message: '如 25-26' }]} initialValue="25-26">
-            <Select style={{ minWidth: 100 }} options={[{ value: '25-26', label: '25-26' }, { value: '26-27', label: '26-27' }]} />
-          </Form.Item>
-          <Form.Item>
-            <Button type="primary" htmlType="submit" icon={<PlusOutlined />} loading={creating}>创建任务</Button>
-          </Form.Item>
-        </Form>
-      </Card>
-
-      <Card title="已有任务">
-        {loading ? <Spin /> : submissions.length === 0 ? (
-          <Empty description="还没有任务" />
-        ) : (
-          <Table
-            rowKey="id"
-            dataSource={submissions}
-            pagination={false}
-            onRow={(r) => ({ onClick: () => navigate(`/submissions/${r.id}`), style: { cursor: 'pointer' } })}
-            columns={[
-              { title: '阶段/科目/省份', render: (_, s: Submission) => `${STAGE_LABEL[s.stage] ?? s.stage} / ${s.subject} / ${s.province}` },
-              { title: '年级', dataIndex: 'school_grade' },
-              { title: '学年', dataIndex: 'academic_year_label' },
-              { title: '考试数', render: (_, s: Submission) => `${s.exam_count}/${s.max_exam_count}` },
-              { title: '状态', render: (_, s: Submission) => <Tag>{s.status}</Tag> },
-              {
-                title: '', width: 48,
-                render: (_, s: Submission) => (
-                  <Popconfirm title="确认删除这个任务？" onConfirm={(e) => { e?.stopPropagation(); onDelete(s.id) }} onCancel={(e) => e?.stopPropagation()}>
-                    <Button danger type="text" icon={<DeleteOutlined />} onClick={(e) => e.stopPropagation()} />
-                  </Popconfirm>
-                ),
-              },
-            ]}
-          />
-        )}
-      </Card>
-    </Flex>
+          )}
+        </Card>
+      </SectionBlock>
+    </div>
   )
 }
