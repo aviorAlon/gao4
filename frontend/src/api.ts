@@ -253,6 +253,20 @@ export async function reopenExam(examId: string): Promise<{ id: string; status: 
   return data
 }
 
+// --- Assets ---
+
+export interface Asset { id: string; exam_id: string; filename: string; media_type: string; material_type?: string }
+
+export async function listExamAssets(examId: string): Promise<{ assets: Asset[] }> {
+  const { data } = await api.get(`/api/exams/${examId}/assets`)
+  return data
+}
+
+export async function linkOriginalSource(examId: string, questionId: string, assetId: string) {
+  const { data } = await api.post(`/api/exams/${examId}/questions/${questionId}/link-original`, { asset_id: assetId })
+  return data
+}
+
 // --- Upload + parse pipeline ---
 
 export interface UploadSession { id: string; exam_id: string; status: string; asset_ids: string[]; job_id?: string }
@@ -357,7 +371,13 @@ export async function updateQuestionRecord(recordId: string, changes: { score_ob
 
 // --- Analysis runs ---
 
-export interface AnalysisRunRef { id: string; status: string; submission_id: string; exam_ids: string[] }
+export interface AnalysisRunRef {
+  id: string
+  status: string
+  submission_id: string
+  exam_ids: string[]
+  exam_versions?: ExamVersionRef[]
+}
 
 export async function createAnalysisRun(submissionId: string, examIds: string[]): Promise<AnalysisRunRef> {
   const { data } = await api.post(`/api/submissions/${submissionId}/analysis-runs`, { exam_ids: examIds })
@@ -434,4 +454,21 @@ export interface MasteryRecord {
 export async function listMasteryRecords(submissionId: string): Promise<{ records: MasteryRecord[] }> {
   const { data } = await api.get(`/api/submissions/${submissionId}/mastery-records`)
   return data
+}
+
+// --- Personal data export ---
+// Fetched via axios (so the X-User-Id header rides along, same as every other call) and then
+// handed to the browser as a download — a plain <a href> to this endpoint would just navigate to
+// raw JSON in the tab instead of saving a file, and would skip the auth header the API expects.
+export async function downloadSubmissionExport(submissionId: string, filenameHint: string) {
+  const { data } = await api.get(`/api/submissions/${submissionId}/export`)
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `exam-diagnosis-${filenameHint}-${submissionId.slice(0, 8)}.json`
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
 }

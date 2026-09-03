@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams, Link } from 'react-router-dom'
 import { Breadcrumb, Button, Card, Empty, Flex, Input, Spin, Table, Tag, message } from 'antd'
-import { PlusOutlined } from '@ant-design/icons'
-import { createExam, getSubmission, listExams, type Exam, type Submission } from '../api'
+import { PlusOutlined, DownloadOutlined } from '@ant-design/icons'
+import {
+  createExam, downloadSubmissionExport, getSubmission, listAnalysisRuns, listExams,
+  listMasteryRecords, type AnalysisRunRef, type Exam, type MasteryRecord, type Submission,
+} from '../api'
 import { Masthead, SectionBlock, Vital, VitalsStrip } from '../chart/Chart'
 import '../chart/chart.css'
 
@@ -12,22 +15,41 @@ const EXAM_STATUS_LABEL: Record<string, string> = {
 const EXAM_STATUS_COLOR: Record<string, string> = {
   uploading: 'default', parsing: 'gold', waiting_confirmation: 'gold', confirmed: 'green',
 }
+const RUN_STATUS_LABEL: Record<string, string> = {
+  awaiting_confirmation: '待开始', queued: '生成中', report_ready: '报告已生成',
+}
+const RUN_STATUS_COLOR: Record<string, string> = {
+  awaiting_confirmation: 'default', queued: 'gold', report_ready: 'green',
+}
+const MASTERY_LABEL: Record<string, string> = {
+  not_started: '未开始', in_progress: '练习中', provisionally_resolved: '初步掌握', resolved: '已掌握',
+}
+const MASTERY_COLOR: Record<string, string> = {
+  not_started: 'default', in_progress: 'processing', provisionally_resolved: 'gold', resolved: 'success',
+}
 
 export default function SubmissionPage() {
   const { id = '' } = useParams()
   const navigate = useNavigate()
   const [submission, setSubmission] = useState<Submission | null>(null)
   const [exams, setExams] = useState<Exam[]>([])
+  const [runs, setRuns] = useState<AnalysisRunRef[]>([])
+  const [mastery, setMastery] = useState<MasteryRecord[]>([])
   const [loading, setLoading] = useState(true)
   const [examName, setExamName] = useState('')
   const [creating, setCreating] = useState(false)
+  const [exporting, setExporting] = useState(false)
 
   async function reload() {
     setLoading(true)
     try {
-      const [s, e] = await Promise.all([getSubmission(id), listExams(id)])
+      const [s, e, r, m] = await Promise.all([
+        getSubmission(id), listExams(id), listAnalysisRuns(id), listMasteryRecords(id),
+      ])
       setSubmission(s)
       setExams(e)
+      setRuns(r.runs)
+      setMastery(m.records)
     } catch {
       message.error('加载失败')
     } finally {
@@ -46,6 +68,19 @@ export default function SubmissionPage() {
       message.error(e?.response?.data?.error ?? '创建失败')
     } finally {
       setCreating(false)
+    }
+  }
+
+  async function onExport() {
+    if (!submission) return
+    setExporting(true)
+    try {
+      await downloadSubmissionExport(id, submission.subject)
+      message.success('已开始下载')
+    } catch {
+      message.error('导出失败')
+    } finally {
+      setExporting(false)
     }
   }
 
@@ -114,6 +149,52 @@ export default function SubmissionPage() {
           </Flex>
         </Card>
       </SectionBlock>
+
+      <SectionBlock marker="neutral" title="历史报告">
+        <Card>
+          {runs.length === 0 ? <Empty description="还没有生成过报告" /> : (
+            <Table
+              rowKey="id"
+              dataSource={runs}
+              pagination={false}
+              onRow={(r) => (r.status === 'report_ready' ? { onClick: () => navigate(`/reports/${r.id}`), style: { cursor: 'pointer' } } : {})}
+              columns={[
+                {
+                  title: '考试', render: (_, r: AnalysisRunRef) =>
+                    r.exam_versions?.map((e) => `${e.name} v${e.version}`).join('、') || r.exam_ids.join('、'),
+                },
+                { title: '状态', render: (_, r: AnalysisRunRef) => <Tag color={RUN_STATUS_COLOR[r.status]}>{RUN_STATUS_LABEL[r.status] ?? r.status}</Tag> },
+                {
+                  title: '', width: 90,
+                  render: (_, r: AnalysisRunRef) => r.status === 'report_ready' && <a onClick={(e) => { e.stopPropagation(); navigate(`/reports/${r.id}`) }}>查看报告</a>,
+                },
+              ]}
+            />
+          )}
+        </Card>
+      </SectionBlock>
+
+      <SectionBlock marker="resolved" title="掌握状态总览">
+        <Card>
+          {mastery.length === 0 ? <Empty description="还没有掌握记录，生成报告并完成验证题后会出现在这里" /> : (
+            <Table
+              rowKey="id"
+              dataSource={mastery}
+              pagination={false}
+              columns={[
+                { title: '知识点', dataIndex: 'knowledge_id', render: (v) => <span className="data-figure">{v}</span> },
+                { title: '错因', dataIndex: 'error_cluster' },
+                { title: '掌握状态', render: (_, m: MasteryRecord) => <Tag color={MASTERY_COLOR[m.status]}>{MASTERY_LABEL[m.status] ?? m.status}</Tag> },
+                { title: '作答次数', render: (_, m: MasteryRecord) => <span className="data-figure">{m.attempt_history.length}</span> },
+              ]}
+            />
+          )}
+        </Card>
+      </SectionBlock>
+
+      <Button icon={<DownloadOutlined />} onClick={onExport} loading={exporting}>
+        导出个人数据（JSON）
+      </Button>
     </div>
   )
 }

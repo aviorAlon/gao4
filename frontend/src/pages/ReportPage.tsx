@@ -287,6 +287,7 @@ function VerificationQuestionItem({ question, mastery, onChanged }: {
   const [score, setScore] = useState<number | null>(null)
   const [maxScore, setMaxScore] = useState<number | null>(10)
   const [submitting, setSubmitting] = useState(false)
+  const [showHistory, setShowHistory] = useState(false)
 
   const lastAttempt = question.attempts[question.attempts.length - 1]
 
@@ -341,7 +342,24 @@ function VerificationQuestionItem({ question, mastery, onChanged }: {
         <Alert
           type={lastAttempt.passed ? 'success' : 'error'} showIcon
           title={lastAttempt.passed ? '本次通过' : '本次未通过（需要 ≥80% 才算通过）'}
-          description={`最近一次：${lastAttempt.score}/${lastAttempt.max_score} 分，累计作答 ${question.attempts.length} 次`}
+          description={
+            <Flex vertical gap={4}>
+              <span>最近一次：{lastAttempt.score}/{lastAttempt.max_score} 分，累计作答 {question.attempts.length} 次</span>
+              {question.attempts.length > 1 && (
+                <a onClick={() => setShowHistory((v) => !v)}>{showHistory ? '收起' : '查看全部作答历史'}</a>
+              )}
+              {showHistory && (
+                <Flex vertical gap={2} style={{ marginTop: 4 }}>
+                  {question.attempts.map((a, i) => (
+                    <Text key={a.id} type="secondary" className="data-figure" style={{ fontSize: 12 }}>
+                      #{i + 1} · {a.score}/{a.max_score} 分 · {a.passed ? '通过' : '未通过'}
+                      {a.duration_seconds ? ` · 用时 ${a.duration_seconds}s` : ''}
+                    </Text>
+                  ))}
+                </Flex>
+              )}
+            </Flex>
+          }
         />
       )}
     </Flex>
