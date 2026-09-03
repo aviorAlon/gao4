@@ -346,6 +346,23 @@ export async function updateParseQuestion(examId: string, index: number, changes
   return data
 }
 
+export interface QuestionInput {
+  question_number: string
+  question_text: string
+  is_wrong_question: boolean
+  original_question_available: boolean
+  student_answer?: string | null
+  original_source?: DraftQuestion['original_source']
+}
+
+// Replaces the *entire* draft_questions list — that's the backend contract for this route, not
+// a per-item patch — so callers must resend every existing question alongside whatever changed.
+// Used for the one thing single-question PATCH can't do: adding a row the parser never produced.
+export async function replaceParseDraft(examId: string, questions: QuestionInput[]) {
+  const { data } = await api.patch(`/api/exams/${examId}/parse-draft`, { questions })
+  return data
+}
+
 // --- Question records (scoring) ---
 
 export interface QuestionRecord {

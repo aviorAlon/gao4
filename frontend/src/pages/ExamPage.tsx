@@ -5,12 +5,13 @@ import {
   Steps, Table, Tag, Typography, Upload, message,
 } from 'antd'
 import type { UploadFile } from 'antd'
-import { InboxOutlined, CheckCircleOutlined, UndoOutlined, LinkOutlined } from '@ant-design/icons'
+import { InboxOutlined, CheckCircleOutlined, UndoOutlined, LinkOutlined, PlusOutlined } from '@ant-design/icons'
 import {
   confirmExam, createAnalysisRun, createUploadSession, confirmStartRun, finishUploadSession,
   getExam, getParseDraft, linkOriginalSource, listExamAssets, listPages, listQuestionRecords,
-  reopenExam, retryJob, runJob, updatePage, updateParseQuestion, updateQuestionRecord, uploadSessionAsset,
-  type Asset, type Exam, type ExamPage as ExamPageData, type QuestionRecord,
+  reopenExam, replaceParseDraft, retryJob, runJob, updatePage, updateParseQuestion, updateQuestionRecord,
+  uploadSessionAsset,
+  type Asset, type DraftQuestion, type Exam, type ExamPage as ExamPageData, type QuestionInput, type QuestionRecord,
 } from '../api'
 import { Masthead, RedPenMark, SectionBlock } from '../chart/Chart'
 import '../chart/chart.css'
@@ -197,6 +198,25 @@ function PagesAndDraft({ exam, onConfirmed }: { exam: Exam; onConfirmed: () => v
     await updateParseQuestion(exam.id, index, changes)
   }
 
+  async function onAddQuestion() {
+    const toInput = (q: DraftQuestion): QuestionInput => ({
+      question_number: q.question_number, question_text: q.question_text,
+      is_wrong_question: q.is_wrong_question, original_question_available: q.original_question_available,
+      student_answer: q.student_answer, original_source: q.original_source,
+    })
+    const blank: QuestionInput = {
+      question_number: String(questions.length + 1), question_text: '',
+      is_wrong_question: true, original_question_available: true, student_answer: '', original_source: null,
+    }
+    try {
+      const result = await replaceParseDraft(exam.id, [...questions.map(toInput), blank])
+      setQuestions(result.questions)
+      message.success('已新增一道题目草稿，请补上题干')
+    } catch (e: any) {
+      message.error(e?.response?.data?.error ?? '新增失败')
+    }
+  }
+
   async function onConfirm() {
     setConfirming(true)
     try {
@@ -244,8 +264,10 @@ function PagesAndDraft({ exam, onConfirmed }: { exam: Exam; onConfirmed: () => v
 
       <SectionBlock marker={questions.some((q) => q.is_wrong_question) ? 'alert' : 'neutral'} title={`题目草稿（${questions.length} 道）`}>
         <Card>
-          {questions.length === 0 ? <Empty description="没有识别出题目，可能需要调整解析规则或人工补录" /> : (
-            <Flex vertical gap="middle">
+          <Flex vertical gap="middle">
+            {questions.length === 0 && <Empty description="没有识别出题目，可能需要调整解析规则或人工补录" />}
+            {questions.length > 0 && (
+              <Flex vertical gap="middle">
               {questions.map((q, i) => (
                 <Card key={q.id} size="small" type="inner" title={
                   <Flex align="center" gap={8}>
@@ -276,8 +298,12 @@ function PagesAndDraft({ exam, onConfirmed }: { exam: Exam; onConfirmed: () => v
                   </Flex>
                 </Card>
               ))}
-            </Flex>
-          )}
+              </Flex>
+            )}
+            <Button icon={<PlusOutlined />} onClick={onAddQuestion} style={{ alignSelf: 'flex-start' }}>
+              手工新增题目
+            </Button>
+          </Flex>
         </Card>
       </SectionBlock>
 
