@@ -1,5 +1,6 @@
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 import re
 import hashlib
@@ -33,8 +34,35 @@ PAGES = SQLiteMapping('pages')
 QUESTION_RECORDS = SQLiteMapping('question_records')
 VERIFICATION_QUESTIONS = SQLiteMapping('verification_questions')
 MASTERY_RECORDS = SQLiteMapping('mastery_records')
+MODEL_CALLS = SQLiteMapping('model_calls')
 
-_PERSISTENT_MAPPINGS = (SUBMISSIONS, EXAMS, ASSETS, RUNS, UPLOAD_SESSIONS, JOBS, PAGES, QUESTION_RECORDS, VERIFICATION_QUESTIONS, MASTERY_RECORDS)
+_PERSISTENT_MAPPINGS = (SUBMISSIONS, EXAMS, ASSETS, RUNS, UPLOAD_SESSIONS, JOBS, PAGES, QUESTION_RECORDS, VERIFICATION_QUESTIONS, MASTERY_RECORDS, MODEL_CALLS)
+
+MODEL_CALLS_MAX = 500
+
+
+def record_model_call(user_id: str | None = None, **context: Any):
+    """Bind a llm.ChatClient.on_call callback that logs into MODEL_CALLS.
+
+    Every call is logged regardless of success — a string of failures is exactly the thing
+    observability exists to surface, not something to hide by only recording the good ones.
+    `context` carries whatever identifies what the call was for (exam_id, run_id, ...); it costs
+    nothing when nobody looks at it and saves a log-diving session when something needs debugging.
+    """
+    def on_call(record: dict[str, Any]) -> None:
+        call_id = str(uuid4())
+        MODEL_CALLS[call_id] = {
+            'id': call_id, 'user_id': user_id or LOCAL_USER_ID,
+            'created_at': datetime.utcnow().isoformat() + 'Z',
+            **context, **record,
+        }
+        # Bound the log instead of growing the table forever — this is a debugging aid, not an
+        # audit trail with retention requirements, so trimming the oldest rows is the right call.
+        if len(MODEL_CALLS) > MODEL_CALLS_MAX:
+            oldest = sorted(MODEL_CALLS.values(), key=lambda item: item['created_at'])[:len(MODEL_CALLS) - MODEL_CALLS_MAX]
+            for item in oldest:
+                del MODEL_CALLS[item['id']]
+    return on_call
 
 OWNED_BY_PATH_PARAM = {
     'sid': SUBMISSIONS, 'eid': EXAMS, 'asset_id': ASSETS, 'rid': RUNS,
@@ -434,7 +462,8 @@ def run_job(job_id: str):
                     asset['ocr_warning'] = pdf_result.get('warning', '')
                 elif asset.get('media_type', '').startswith('text/'):
                     content = content.decode('utf-8', errors='replace')
-                parser = ModelTextSplitter(client_from_env('split')) if isinstance(content, str) else OpenAICompatibleVisionParser()
+                split_client = client_from_env('split', on_call=record_model_call(exam.get('user_id'), exam_id=job['exam_id'], asset_id=asset['id']))
+                parser = ModelTextSplitter(split_client) if isinstance(content, str) else OpenAICompatibleVisionParser()
                 result = parser.parse_page(asset['filename'], content, asset['page_order'])
                 submission = SUBMISSIONS[exam['submission_id']]
                 result.subject_mismatch = bool(result.subject and result.subject != submission['subject'])
@@ -872,11 +901,12 @@ def get_analysis_report(rid: str):
         'quality_flags': build_quality_flags(run['exam_ids'], records, unmapped),
         'source_question_ids': [record['id'] for record in records],
     }
-    report.update(diagnose_records(records, client=client_from_env('analysis')))
+    analysis_client = client_from_env('analysis', on_call=record_model_call(run.get('user_id'), run_id=rid))
+    report.update(diagnose_records(records, client=analysis_client))
     report['review'] = review_report(report, partition)
     if report['review']['status'] != APPROVED:
         report['quality_flags'].append({'code': 'review_pending', 'severity': 'warning', 'detail': [item['code'] for item in report['review']['findings']], 'message': f"独立审查发现 {len(report['review']['findings'])} 处问题，{report['review']['pending_verification_questions']} 道验证题的参考答案在复核通过前不会展示"})
-    report_client = client_from_env('report')
+    report_client = client_from_env('report', on_call=record_model_call(run.get('user_id'), run_id=rid))
     if report_client is not None:
         summary = generate_report_summary(report_client, report)
         if summary:
@@ -979,3 +1009,26 @@ def export_report(rid: str, format: str = 'md'):
     if format == 'md':
         return PlainTextResponse(render_markdown(run['report']), media_type='text/markdown')
     return JSONResponse({'error': 'unsupported_format'}, status_code=422)
+
+@app.get('/api/model-calls')
+def list_model_calls(user_id: str = Depends(current_user_id), role: str | None = None, limit: int = 100):
+    """Observability for the analysis/report/split model roles: every call this user's actions
+    triggered, success or not, with latency and token usage where the provider reported it. There
+    was previously no way to answer "is the model actually being called, and is it working" short
+    of reading server stdout."""
+    limit = max(1, min(limit, MODEL_CALLS_MAX))
+    calls = [item for item in MODEL_CALLS.values() if item.get('user_id', LOCAL_USER_ID) == user_id]
+    if role:
+        calls = [item for item in calls if item.get('role') == role]
+    calls.sort(key=lambda item: item['created_at'], reverse=True)
+    calls = calls[:limit]
+    total = len(calls)
+    succeeded = sum(1 for item in calls if item.get('success'))
+    return {
+        'calls': calls,
+        'summary': {
+            'total': total, 'succeeded': succeeded, 'failed': total - succeeded,
+            'avg_latency_ms': round(sum(item.get('latency_ms', 0) for item in calls) / total) if total else 0,
+            'total_tokens': sum(item.get('total_tokens') or 0 for item in calls),
+        },
+    }

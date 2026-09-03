@@ -36,8 +36,8 @@ import re
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, Callable
 
 DEEPSEEK_BASE_URL = 'https://api.deepseek.com'
 
@@ -50,7 +50,14 @@ ROLE_DEFAULTS = {
 
 @dataclass
 class ChatClient:
-    """One configured model role, bound to a single OpenAI-compatible endpoint."""
+    """One configured model role, bound to a single OpenAI-compatible endpoint.
+
+    `on_call`, when given, is invoked once per `complete_json` call (not per retry attempt) with a
+    structured record — role, model, latency, whether it ultimately succeeded, the last error, how
+    many attempts it took, and token usage if the provider reported it. This is the only place that
+    knows all of that; without it, every model call was a black box (no way to tell success rate,
+    latency, cost, or retry pressure apart from reading server logs by hand).
+    """
 
     role: str
     base_url: str
@@ -58,6 +65,7 @@ class ChatClient:
     model: str
     timeout: float = 30.0
     max_retries: int = 2
+    on_call: Callable[[dict[str, Any]], None] | None = field(default=None, compare=False)
 
     def complete_json(self, system: str, user: str) -> dict[str, Any] | None:
         """Ask the model for a strict JSON object. Returns None on any failure — never raises."""
@@ -71,15 +79,38 @@ class ChatClient:
             endpoint, data=json.dumps(payload).encode(), method='POST',
             headers={'Authorization': f'Bearer {self.api_key}', 'Content-Type': 'application/json'},
         )
+        started = time.monotonic()
+        last_error: str | None = None
+        usage: dict[str, Any] | None = None
         for attempt in range(self.max_retries):
             try:
                 with urllib.request.urlopen(request, timeout=self.timeout) as response:
                     outer = json.loads(response.read().decode())
-                return _extract_json(outer)
-            except Exception:
+                usage = outer.get('usage') if isinstance(outer.get('usage'), dict) else None
+                result = _extract_json(outer)
+                self._record(started, attempt + 1, result is not None, None if result is not None else 'response_not_valid_json_object', usage)
+                return result
+            except Exception as exc:
+                last_error = f'{type(exc).__name__}: {exc}'
                 if attempt < self.max_retries - 1:
                     time.sleep(0.05)
+        self._record(started, self.max_retries, False, last_error, usage)
         return None
+
+    def _record(self, started: float, attempts: int, success: bool, error: str | None, usage: dict[str, Any] | None) -> None:
+        if self.on_call is None:
+            return
+        try:
+            self.on_call({
+                'role': self.role, 'model': self.model, 'base_url': self.base_url,
+                'latency_ms': round((time.monotonic() - started) * 1000),
+                'attempts': attempts, 'success': success, 'error': error,
+                'prompt_tokens': (usage or {}).get('prompt_tokens'),
+                'completion_tokens': (usage or {}).get('completion_tokens'),
+                'total_tokens': (usage or {}).get('total_tokens'),
+            })
+        except Exception:
+            pass  # observability must never be the reason a real model call looks like it failed
 
 
 def _extract_json(outer: dict[str, Any]) -> dict[str, Any] | None:
@@ -98,13 +129,16 @@ def _extract_json(outer: dict[str, Any]) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
-def client_from_env(role: str) -> ChatClient | None:
+def client_from_env(role: str, on_call: Callable[[dict[str, Any]], None] | None = None) -> ChatClient | None:
     """Build a ChatClient for `role` from EXAM_DIAGNOSIS_<ROLE>_* env vars.
 
     Only the API key is required to opt in — base_url/model fall back to the
     DeepSeek defaults for that role, matching the vision parser's "must be
     fully configured or stay off" stance, minus needing three vars for every
     role: an operator only has to supply a key to activate real inference.
+
+    `on_call` is optional and purely for observability (see `ChatClient.on_call`); omitting it
+    changes nothing about whether or how the role runs.
     """
     if role not in ROLE_DEFAULTS:
         raise ValueError(f'unknown model role: {role}')
@@ -116,4 +150,4 @@ def client_from_env(role: str) -> ChatClient | None:
     base_url = os.getenv(prefix + 'BASE_URL') or defaults['base_url']
     model = os.getenv(prefix + 'MODEL') or defaults['model']
     timeout = float(os.getenv(prefix + 'TIMEOUT') or 30)
-    return ChatClient(role=role, base_url=base_url, api_key=api_key, model=model, timeout=timeout)
+    return ChatClient(role=role, base_url=base_url, api_key=api_key, model=model, timeout=timeout, on_call=on_call)
