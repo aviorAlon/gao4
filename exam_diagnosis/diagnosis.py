@@ -68,6 +68,31 @@ def _model_generate_verification(client: Any, cluster: dict[str, Any]) -> dict[s
     return {'question_text': question_text.strip(), 'answer': answer.strip()}
 
 
+def model_grade_attempt(client: Any, question_text: str, reference_answer: str, student_answer: str) -> dict[str, Any] | None:
+    """Ask the grade-role model to mark a student's answer against the reviewed reference answer.
+    Returns {'score_ratio': 0..1, 'feedback': str} or None on any failure — the caller keeps the
+    student's self-reported score in that case, which is the same never-fake-success rule as every
+    other model integration here: an auto-grade is only ever used when it's real."""
+    system = (
+        '你是高中数学教师，要根据参考答案批改学生对一道练习题的作答。只根据学生实际写出的内容评判：'
+        '最终答案凑巧对了但过程错误或缺失要扣分，过程正确但最后一步算错也要给相应的部分分，不要非零即满分。'
+        '严格只返回 JSON，不要输出其它文字：{"score_ratio": 0到1之间的小数（1表示完全正确）, '
+        '"feedback": 针对这次作答的具体反馈（不超过80字，指出对在哪、错在哪）}'
+    )
+    user = json.dumps({
+        'question_text': question_text,
+        'reference_answer': reference_answer,
+        'student_answer': student_answer,
+    }, ensure_ascii=False)
+    result = client.complete_json(system, user)
+    if not isinstance(result, dict):
+        return None
+    ratio, feedback = result.get('score_ratio'), result.get('feedback')
+    if not isinstance(ratio, (int, float)) or isinstance(ratio, bool) or not 0 <= ratio <= 1 or not isinstance(feedback, str):
+        return None
+    return {'score_ratio': float(ratio), 'feedback': feedback.strip()}
+
+
 def _resolve_cause(client: Any, record: dict[str, Any], cache: dict[str, dict[str, Any]]) -> dict[str, Any]:
     rid = record['id']
     if rid in cache:

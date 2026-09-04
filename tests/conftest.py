@@ -7,7 +7,7 @@ import yaml
 SHIPPED_KNOWLEDGE_PATH = Path(__file__).resolve().parents[1] / 'data' / 'knowledge' / 'high_math_guangdong_v1.yaml'
 SHIPPED_KNOWLEDGE_VERSION = yaml.safe_load(SHIPPED_KNOWLEDGE_PATH.read_text(encoding='utf-8'))['version']
 
-MODEL_ROLES = ('ANALYSIS', 'REPORT', 'SPLIT', 'VERIFY')
+MODEL_ROLES = ('ANALYSIS', 'REPORT', 'SPLIT', 'VERIFY', 'GRADE')
 
 
 @pytest.fixture(autouse=True, scope='session')

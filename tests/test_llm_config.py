@@ -39,6 +39,12 @@ def test_unknown_role_rejected():
         client_from_env('translation')
 
 
+def test_grade_role_defaults_to_the_reasoning_tier_model(monkeypatch):
+    monkeypatch.setenv('EXAM_DIAGNOSIS_GRADE_API_KEY', 'sk-test')
+    monkeypatch.delenv('EXAM_DIAGNOSIS_GRADE_MODEL', raising=False)
+    assert client_from_env('grade').model == 'deepseek-v4-pro'
+
+
 def test_no_role_has_a_real_credential_by_default():
     # Regression guard for a real incident: a genuine .env.local sitting in the repo (created
     # while working through this project's own DeepSeek setup) got re-read by app.py's module
@@ -47,7 +53,7 @@ def test_no_role_has_a_real_credential_by_default():
     # these before the session starts and app.py refuses to load .env.local under pytest at all —
     # this asserts the guarantee that matters: no role is ever live unless a test explicitly
     # (via its own monkeypatch.setenv, as the other tests in this file do) turns it on.
-    for role in ('analysis', 'report', 'split', 'verify'):
+    for role in ('analysis', 'report', 'split', 'verify', 'grade'):
         assert client_from_env(role) is None
 
 

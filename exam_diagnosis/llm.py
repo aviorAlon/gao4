@@ -20,6 +20,9 @@ Four roles are defined today:
   worked reference answer) per error cluster. Getting both the problem and
   its solution right needs the same reasoning tier as ``analysis``, so it
   also defaults to ``deepseek-v4-pro``.
+- ``grade``: marking a student's submitted answer to a verification question
+  against its reviewed reference answer. Judging partial credit on a worked
+  math solution is reasoning work too, so it defaults to ``deepseek-v4-pro``.
 
 Every role is opt-in and independently configurable via environment
 variables, e.g. for ``analysis``:
@@ -50,6 +53,7 @@ ROLE_DEFAULTS = {
     'report': {'base_url': DEEPSEEK_BASE_URL, 'model': 'deepseek-v4-flash'},
     'split': {'base_url': DEEPSEEK_BASE_URL, 'model': 'deepseek-v4-flash'},
     'verify': {'base_url': DEEPSEEK_BASE_URL, 'model': 'deepseek-v4-pro'},
+    'grade': {'base_url': DEEPSEEK_BASE_URL, 'model': 'deepseek-v4-pro'},
 }
 
 

@@ -13,7 +13,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 from .parser import ModelTextSplitter, OpenAICompatibleVisionParser, extract_pdf_text
 from .knowledge import match_knowledge_points
-from .diagnosis import diagnose_records
+from .diagnosis import diagnose_records, model_grade_attempt
 from .storage import SQLiteMapping
 from .knowledge import KnowledgePartitionNotFound, available_partitions, find_partition
 from .review import APPROVED, NEEDS_REVIEW, review_report, withhold_unreviewed_answer
@@ -1070,7 +1070,20 @@ def submit_verification_attempt(question_id: str, body: VerificationAttemptIn):
         return JSONResponse({'error': 'verification_question_not_found'}, status_code=404)
     if body.max_score <= 0 or body.score < 0 or body.score > body.max_score:
         return JSONResponse({'error': 'invalid_score'}, status_code=422)
-    attempt = {'id': str(uuid4()), **body.model_dump(), 'passed': body.score / body.max_score >= 0.8}
+    attempt = {'id': str(uuid4()), **body.model_dump(), 'passed': body.score / body.max_score >= 0.8, 'graded_by': 'self'}
+    # Auto-grade only against a reference answer that has passed independent review — the same
+    # gate that decides whether the answer is shown to the student at all. Marking against an
+    # unreviewed (possibly wrong or empty) reference would just launder a bad answer into a
+    # confident-looking score. The self-reported score above stays as the fallback either way.
+    if question.get('review_status') == APPROVED and str(question.get('answer') or '').strip():
+        grade_client = guarded_client_from_env('grade', question.get('user_id'), verification_question_id=question_id)
+        if grade_client is not None:
+            graded = model_grade_attempt(grade_client, question['question_text'], question['answer'], body.answer)
+            if graded is not None:
+                attempt['auto_graded_score_ratio'] = graded['score_ratio']
+                attempt['auto_graded_feedback'] = graded['feedback']
+                attempt['passed'] = graded['score_ratio'] >= 0.8
+                attempt['graded_by'] = 'model'
     question['attempts'].append(attempt)
     VERIFICATION_QUESTIONS[question_id] = question
     mastery_id = f"{question['submission_id']}:{question['knowledge_id']}:{question['target_error']}"

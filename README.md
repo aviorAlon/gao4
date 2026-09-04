@@ -71,19 +71,21 @@ PYTHONPATH=. pytest -q
 - 视觉接口使用 OpenAI-compatible `/chat/completions` 多模态请求，图片编码为 base64 data URL，并要求 JSON 响应。
 - 未配置视觉解析器、请求失败或响应 JSON 无法解析时，结果明确标记为 `manual_confirmation_required`，不会伪造 OCR 成功。
 
-## 模型推理（题目切分 / 错因诊断 / 验证题生成 / 报告概述）
+## 模型推理（题目切分 / 错因诊断 / 验证题生成 / 验证题批改 / 报告概述）
 
-- 按角色配置，四个角色互相独立，默认都不开启：
+- 按角色配置，五个角色互相独立，默认都不开启：
   - `split`（题目切分）：`EXAM_DIAGNOSIS_SPLIT_API_KEY` / `EXAM_DIAGNOSIS_SPLIT_BASE_URL` / `EXAM_DIAGNOSIS_SPLIT_MODEL` / `EXAM_DIAGNOSIS_SPLIT_TIMEOUT`
   - `analysis`（错因诊断）：`EXAM_DIAGNOSIS_ANALYSIS_API_KEY` / `EXAM_DIAGNOSIS_ANALYSIS_BASE_URL` / `EXAM_DIAGNOSIS_ANALYSIS_MODEL` / `EXAM_DIAGNOSIS_ANALYSIS_TIMEOUT`
   - `verify`（验证题生成）：`EXAM_DIAGNOSIS_VERIFY_API_KEY` / `EXAM_DIAGNOSIS_VERIFY_BASE_URL` / `EXAM_DIAGNOSIS_VERIFY_MODEL` / `EXAM_DIAGNOSIS_VERIFY_TIMEOUT`
+  - `grade`（验证题批改）：`EXAM_DIAGNOSIS_GRADE_API_KEY` / `EXAM_DIAGNOSIS_GRADE_BASE_URL` / `EXAM_DIAGNOSIS_GRADE_MODEL` / `EXAM_DIAGNOSIS_GRADE_TIMEOUT`
   - `report`（报告概述）：`EXAM_DIAGNOSIS_REPORT_API_KEY` / `EXAM_DIAGNOSIS_REPORT_BASE_URL` / `EXAM_DIAGNOSIS_REPORT_MODEL` / `EXAM_DIAGNOSIS_REPORT_TIMEOUT`
-- 只需配置对应角色的 `API_KEY` 即可启用；`BASE_URL`/`MODEL` 不填时默认为 DeepSeek 的 `https://api.deepseek.com`，`analysis`/`verify` 默认推理档 `deepseek-v4-pro`，`split`/`report` 默认更便宜的 `deepseek-v4-flash`；换成任意 OpenAI-compatible 服务商只需覆盖这两项。
+- 只需配置对应角色的 `API_KEY` 即可启用；`BASE_URL`/`MODEL` 不填时默认为 DeepSeek 的 `https://api.deepseek.com`，`analysis`/`verify`/`grade` 默认推理档 `deepseek-v4-pro`，`split`/`report` 默认更便宜的 `deepseek-v4-flash`；换成任意 OpenAI-compatible 服务商只需覆盖这两项。
+- `grade` 角色在学生提交验证题作答时调用：拿题干、已复核的参考答案和学生作答让模型批改，给出 0-1 的得分比例和一句具体反馈，"是否通过"以模型的判定为准（≥0.8 通过），学生自评的分数仍然保留在记录里。只对参考答案**已通过独立复核**的验证题启用——拿一份没审过的参考答案去批改，只会把错答案洗成一个看起来可信的分数。未配置/调用失败/参考答案未复核时，退回原来的学生自评判定，作答记录上的 `graded_by` 字段（`model` / `self`）说明这次是谁判的。
 - `split` 角色替代文本/PDF 内容原来的正则切题：不同试卷题号格式差异很大（"1."、"第1题"、"1、"……），正则难以覆盖所有情况，交给模型按语义切分更可靠。图片走的视觉解析模型本来就是模型切题，这个角色补齐的是文本/PDF 这条路径。
 - `analysis` 角色只对错题调用，按知识点+题目内容判断根因（条件遗漏/计算错误/概念不清/审题错误/书写不规范/待人工确认之一）并给出针对这道题的解释和规避建议，结果按题目 id 缓存，同一题不会重复调用。
 - `verify` 角色按错因专题调用，生成一道真正的变式练习题和完整参考答案（含关键步骤），而不是"完成一道变式题并说明关键步骤"这句固定模板；生成的内容仍然要过独立审查阶段（见下）才会把参考答案展示给学生。
 - `report` 角色只读取已经算好的结构化统计（错题数、根因分布、复习优先级前几项、质量提示），生成一段面向学生/家长的概述文字，不允许编造数据里没有的信息。
-- 四个角色都遵循和视觉解析一致的规则：没配置、请求失败、响应不是合法 JSON 或不满足预期结构时一律判定为不可用，自动退回各自的兜底逻辑，不会伪造成功。`split` 的兜底是内置的正则匹配（覆盖"第N题"/"N题"/"N."/"N、"/"N．"），但正则结果一律标记 `review_required`，需要人工确认切分是否准确、完整——不能因为规则跑完了就当成解析可信；`verify` 的兜底是原来那句固定模板。
+- 五个角色都遵循和视觉解析一致的规则：没配置、请求失败、响应不是合法 JSON 或不满足预期结构时一律判定为不可用，自动退回各自的兜底逻辑，不会伪造成功。`split` 的兜底是内置的正则匹配（覆盖"第N题"/"N题"/"N."/"N、"/"N．"），但正则结果一律标记 `review_required`，需要人工确认切分是否准确、完整——不能因为规则跑完了就当成解析可信；`verify` 的兜底是原来那句固定模板；`grade` 的兜底是学生自评的分数。
 - 这些 `API_KEY` 不想每次开新终端都用 `$env:...` 重设的话，可以复制 [`.env.local.example`](.env.local.example) 为同目录下的 `.env.local`，把占位符换成真实 key。`.env.local` 已经在 `.gitignore` 的 `.env.*` 规则里，不会被提交；启动时会自动加载，真实的环境变量（如果两边都设了）优先于文件里的值。
 
 ## 模型调用可观测性与成本控制
