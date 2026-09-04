@@ -53,8 +53,14 @@ def test_no_role_has_a_real_credential_by_default():
     # these before the session starts and app.py refuses to load .env.local under pytest at all —
     # this asserts the guarantee that matters: no role is ever live unless a test explicitly
     # (via its own monkeypatch.setenv, as the other tests in this file do) turns it on.
-    for role in ('analysis', 'report', 'split', 'verify', 'grade'):
+    for role in ('analysis', 'report', 'split', 'verify', 'grade', 'match'):
         assert client_from_env(role) is None
+
+
+def test_match_role_defaults_to_cheaper_model(monkeypatch):
+    monkeypatch.setenv('EXAM_DIAGNOSIS_MATCH_API_KEY', 'sk-test')
+    monkeypatch.delenv('EXAM_DIAGNOSIS_MATCH_MODEL', raising=False)
+    assert client_from_env('match').model == 'deepseek-v4-flash'
 
 
 def test_split_role_defaults_to_cheaper_model(monkeypatch):

@@ -54,6 +54,9 @@ ROLE_DEFAULTS = {
     'split': {'base_url': DEEPSEEK_BASE_URL, 'model': 'deepseek-v4-flash'},
     'verify': {'base_url': DEEPSEEK_BASE_URL, 'model': 'deepseek-v4-pro'},
     'grade': {'base_url': DEEPSEEK_BASE_URL, 'model': 'deepseek-v4-pro'},
+    # Picking knowledge points from a candidate list is classification, not reasoning — the
+    # cheaper tier is fine and it runs once per question.
+    'match': {'base_url': DEEPSEEK_BASE_URL, 'model': 'deepseek-v4-flash'},
 }
 
 

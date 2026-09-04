@@ -10,9 +10,11 @@ import threading
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
+import yaml
 from .parser import LocalParser, ModelTextSplitter, OpenAICompatibleVisionParser, PageParseResult, extract_pdf_text, is_scanned_pdf_result, parse_scanned_pdf
 from .knowledge import match_knowledge_points
+from . import knowledge
 from .diagnosis import diagnose_records, model_grade_attempt
 from .storage import SQLiteMapping
 from .tasks import TaskQueue
@@ -91,8 +93,13 @@ MODEL_CALLS = SQLiteMapping('model_calls')
 TASKS = SQLiteMapping('tasks')
 USERS = SQLiteMapping('users')
 AUTH_SESSIONS = SQLiteMapping('auth_sessions')
+USER_KNOWLEDGE = SQLiteMapping('user_knowledge')
 
-_PERSISTENT_MAPPINGS = (SUBMISSIONS, EXAMS, ASSETS, RUNS, UPLOAD_SESSIONS, JOBS, PAGES, QUESTION_RECORDS, VERIFICATION_QUESTIONS, MASTERY_RECORDS, MODEL_CALLS, TASKS, USERS, AUTH_SESSIONS)
+_PERSISTENT_MAPPINGS = (SUBMISSIONS, EXAMS, ASSETS, RUNS, UPLOAD_SESSIONS, JOBS, PAGES, QUESTION_RECORDS, VERIFICATION_QUESTIONS, MASTERY_RECORDS, MODEL_CALLS, TASKS, USERS, AUTH_SESSIONS, USER_KNOWLEDGE)
+
+# The knowledge registry resolves "public partition, overlaid by this user's own" — it gets the
+# user's records from here so knowledge.py needn't know about SQLite.
+knowledge.set_user_partition_provider(lambda user_id: [item for item in USER_KNOWLEDGE.values() if item.get('user_id') == user_id])
 
 
 def _flush_all_state() -> None:
@@ -211,6 +218,7 @@ OWNED_BY_PATH_PARAM = {
     'sid': SUBMISSIONS, 'eid': EXAMS, 'asset_id': ASSETS, 'rid': RUNS,
     'session_id': UPLOAD_SESSIONS, 'job_id': JOBS, 'page_id': PAGES,
     'record_id': QUESTION_RECORDS, 'question_id': VERIFICATION_QUESTIONS, 'task_id': TASKS,
+    'kb_id': USER_KNOWLEDGE,
 }
 
 def enforce_resource_owner(request: Request):
@@ -353,9 +361,9 @@ def create_submission(body: SubmissionIn, user_id: str = Depends(current_user_id
     span = parse_academic_year_range(body.academic_year_label)
     if not span:
         return JSONResponse({'error': 'invalid_academic_year', 'rule': MIN_ACADEMIC_YEAR_RULE}, status_code=422)
-    partition = find_partition(body.stage, body.subject, body.province, body.curriculum_year)
+    partition = find_partition(body.stage, body.subject, body.province, body.curriculum_year, user_id=user_id)
     if partition is None:
-        return JSONResponse({'error': 'knowledge_partition_not_found', 'requested': {'stage': body.stage, 'subject': body.subject, 'province': body.province, 'curriculum_year': body.curriculum_year}, 'available_partitions': available_partitions()}, status_code=422)
+        return JSONResponse({'error': 'knowledge_partition_not_found', 'requested': {'stage': body.stage, 'subject': body.subject, 'province': body.province, 'curriculum_year': body.curriculum_year}, 'available_partitions': available_partitions(user_id=user_id)}, status_code=422)
     if not partition.covers_grade(body.school_grade):
         return JSONResponse({'error': 'grade_outside_partition_scope', 'school_grade': body.school_grade, 'academic_year_range': list(partition.academic_year_range)}, status_code=422)
     sid=str(uuid4())
@@ -364,8 +372,20 @@ def create_submission(body: SubmissionIn, user_id: str = Depends(current_user_id
     return item
 
 @app.get('/api/knowledge-partitions')
-def list_knowledge_partitions():
-    return {'partitions': available_partitions()}
+def list_knowledge_partitions(user_id: str = Depends(current_user_id)):
+    """Public partitions plus this user's own; where both cover a scope, the user's is the one
+    listed (it's the one that would be used), with `source: 'user'`."""
+    return {'partitions': available_partitions(user_id=user_id)}
+
+
+@app.get('/api/knowledge-partitions/points')
+def knowledge_partition_points(stage: str, subject: str, province: str, curriculum_year: int | None = None, user_id: str = Depends(current_user_id)):
+    """The effective knowledge points for a scope as this user sees them (public base merged with
+    their own partition, each point tagged with its origin)."""
+    partition = find_partition(stage, subject, province, curriculum_year, user_id=user_id)
+    if partition is None:
+        return JSONResponse({'error': 'knowledge_partition_not_found', 'requested': {'stage': stage, 'subject': subject, 'province': province, 'curriculum_year': curriculum_year}, 'available_partitions': available_partitions(user_id=user_id)}, status_code=422)
+    return {'partition': partition.describe(), 'points': [{**point, 'origin': point.get('origin', 'public')} for point in partition.points]}
 
 @app.get('/api/submissions/{sid}')
 def get_submission(sid: str):
@@ -380,7 +400,7 @@ def export_submission(sid: str):
     if not submission:
         return JSONResponse({'error': 'submission_not_found'}, status_code=404)
     exam_ids = [item['id'] for item in EXAMS.values() if item['submission_id'] == sid]
-    partition = find_partition(submission['stage'], submission['subject'], submission['province'], submission.get('curriculum_year'))
+    partition = find_partition(submission['stage'], submission['subject'], submission['province'], submission.get('curriculum_year'), user_id=submission.get('user_id', LOCAL_USER_ID))
     knowledge_version = partition.version if partition else None
     return {'submission': submission, 'knowledge_partition': partition.describe() if partition else None, 'exams': [EXAMS[eid] for eid in exam_ids], 'assets': [item for item in ASSETS.values() if item['exam_id'] in exam_ids], 'pages': [item for item in PAGES.values() if item['exam_id'] in exam_ids], 'question_records': [item for item in QUESTION_RECORDS.values() if item['exam_id'] in exam_ids], 'analysis_runs': [item for item in RUNS.values() if item['submission_id'] == sid], 'verification_questions': [item for item in VERIFICATION_QUESTIONS.values() if item['submission_id'] == sid], 'mastery_records': [item for item in MASTERY_RECORDS.values() if item['submission_id'] == sid], 'versions': {'export_schema': '1.0.0', 'knowledge_base': knowledge_version, 'application': app.version}}
 
@@ -967,10 +987,12 @@ def update_question_record(record_id: str, body: QuestionRecordEditIn):
 def apply_knowledge_mapping(record: dict):
     exam = EXAMS[record['exam_id']]
     submission = SUBMISSIONS[exam['submission_id']]
+    user_id = submission.get('user_id', LOCAL_USER_ID)
     matches = match_knowledge_points(
         stage=submission['stage'], subject=submission['subject'],
         province=submission['province'], question_text=record['question_text'],
-        curriculum_year=submission.get('curriculum_year'),
+        curriculum_year=submission.get('curriculum_year'), user_id=user_id,
+        client=guarded_client_from_env('match', user_id, exam_id=exam['id'], record_id=record['id']),
     )
     record['knowledge_points'] = matches
     record['knowledge_point_ids'] = [item['knowledge_id'] for item in matches]
@@ -985,7 +1007,7 @@ def map_question_knowledge(record_id: str):
     try:
         matches = apply_knowledge_mapping(record)
     except KnowledgePartitionNotFound as missing:
-        return JSONResponse({'error': 'knowledge_partition_not_found', 'requested': {'stage': missing.stage, 'subject': missing.subject, 'province': missing.province}, 'available_partitions': available_partitions()}, status_code=422)
+        return JSONResponse({'error': 'knowledge_partition_not_found', 'requested': {'stage': missing.stage, 'subject': missing.subject, 'province': missing.province}, 'available_partitions': available_partitions(user_id=record.get('user_id'))}, status_code=422)
     return {'record_id': record_id, 'knowledge_points': matches}
 
 def exam_versions(exam_ids: list[str]) -> list[dict]:
@@ -1097,9 +1119,9 @@ def _generate_report_for_run(rid: str, run: dict) -> dict:
     """The generation itself, for a run already claimed by _claim_report_generation."""
     try:
         submission = SUBMISSIONS[run['submission_id']]
-        partition = find_partition(submission['stage'], submission['subject'], submission['province'], submission.get('curriculum_year'))
+        partition = find_partition(submission['stage'], submission['subject'], submission['province'], submission.get('curriculum_year'), user_id=submission.get('user_id', LOCAL_USER_ID))
         if partition is None:
-            raise ReportGenerationError(422, {'error': 'knowledge_partition_not_found', 'requested': {'stage': submission['stage'], 'subject': submission['subject'], 'province': submission['province']}, 'available_partitions': available_partitions()})
+            raise ReportGenerationError(422, {'error': 'knowledge_partition_not_found', 'requested': {'stage': submission['stage'], 'subject': submission['subject'], 'province': submission['province']}, 'available_partitions': available_partitions(user_id=submission.get('user_id'))})
         selected = run.get('exam_versions') or exam_versions(run['exam_ids'])
         current = exam_versions(run['exam_ids'])
         if current != selected:
@@ -1476,3 +1498,182 @@ def me(user_id: str = Depends(current_user_id)):
     # Auth is optional and no token was sent: the caller is the header-named (or default local)
     # pseudo-user, which is a real identity for data ownership even though nobody logged in.
     return {'user': {'id': user_id, 'username': user_id, 'display_name': '本地用户' if user_id == LOCAL_USER_ID else user_id, 'created_at': None}, 'anonymous': True, 'auth_required': AUTH_REQUIRED}
+
+
+# --- User-maintained knowledge bases --------------------------------------------------------------
+#
+# The product ships public partitions (data/knowledge/*.yaml); each user can keep their own
+# partition per scope, either extending the public one (its points as the base, the user's added
+# on top / overriding by knowledge_id) or standing alone for a scope the product doesn't cover.
+# Curating the *content* is a later job — this is the mechanism it will run on.
+
+
+class KnowledgePointIn(BaseModel):
+    knowledge_id: str
+    name: str
+    chapter: str
+    keywords: list[str] = []
+    confidence: float = 0.8
+    parent: str | None = None
+    dependencies: list[str] = []
+    grade_scope: str
+    textbook_chapter: str = ''
+
+
+class KnowledgeBaseIn(BaseModel):
+    stage: str
+    subject: str
+    province: str
+    curriculum_year: int
+    academic_year_range: list[str] = []
+    extends_public: bool = True
+    name: str = ''
+    version: str = ''
+    curriculum: str | None = None
+    knowledge_points: list[KnowledgePointIn] = []
+
+
+KNOWLEDGE_BASE_RECORD_FIELDS = ('stage', 'subject', 'province', 'curriculum_year', 'academic_year_range', 'extends_public', 'name', 'version', 'curriculum', 'knowledge_points')
+
+
+def _knowledge_base_view(record: dict) -> dict:
+    """The stored record plus what it resolves to (merged point count, base version) — or the
+    validation problem, if the public base has changed underneath it."""
+    view = {field: record.get(field) for field in ('id', 'user_id', 'created_at', 'updated_at', *KNOWLEDGE_BASE_RECORD_FIELDS)}
+    try:
+        view['resolved'] = knowledge.user_partition_from_record(record).describe()
+        view['problem'] = None
+    except ValueError as exc:
+        view['resolved'] = None
+        view['problem'] = str(exc)
+    return view
+
+
+def _validate_knowledge_base(record: dict):
+    """422 payload if the record doesn't validate, else None."""
+    try:
+        knowledge.user_partition_from_record(record)
+    except ValueError as exc:
+        reason = str(exc)
+        code = 'public_partition_not_found' if reason.startswith('public partition not found') else 'invalid_knowledge_base'
+        return JSONResponse({'error': code, 'detail': reason}, status_code=422)
+    return None
+
+
+def _same_scope_conflict(user_id: str, record: dict, exclude_id: str | None = None) -> bool:
+    key = (record['stage'], record['subject'], record['province'], int(record['curriculum_year']))
+    return any(
+        item['id'] != exclude_id and (item['stage'], item['subject'], item['province'], int(item['curriculum_year'])) == key
+        for item in USER_KNOWLEDGE.values() if item.get('user_id') == user_id
+    )
+
+
+@app.get('/api/knowledge-bases')
+def list_knowledge_bases(user_id: str = Depends(current_user_id)):
+    return {'knowledge_bases': [_knowledge_base_view(item) for item in USER_KNOWLEDGE.values() if item.get('user_id') == user_id]}
+
+
+@app.post('/api/knowledge-bases', status_code=201)
+def create_knowledge_base(body: KnowledgeBaseIn, user_id: str = Depends(current_user_id)):
+    record = {'id': str(uuid4()), 'user_id': user_id, **body.model_dump(), 'created_at': datetime.utcnow().isoformat() + 'Z', 'updated_at': datetime.utcnow().isoformat() + 'Z'}
+    if _same_scope_conflict(user_id, record):
+        return JSONResponse({'error': 'knowledge_base_exists_for_scope'}, status_code=409)
+    problem = _validate_knowledge_base(record)
+    if problem is not None:
+        return problem
+    USER_KNOWLEDGE[record['id']] = record
+    return _knowledge_base_view(record)
+
+
+@app.get('/api/knowledge-bases/{kb_id}')
+def get_knowledge_base(kb_id: str):
+    record = USER_KNOWLEDGE.get(kb_id)
+    if not record:
+        return JSONResponse({'error': 'knowledge_base_not_found'}, status_code=404)
+    return _knowledge_base_view(record)
+
+
+@app.put('/api/knowledge-bases/{kb_id}')
+def replace_knowledge_base(kb_id: str, body: KnowledgeBaseIn):
+    record = USER_KNOWLEDGE.get(kb_id)
+    if not record:
+        return JSONResponse({'error': 'knowledge_base_not_found'}, status_code=404)
+    updated = {**record, **body.model_dump(), 'updated_at': datetime.utcnow().isoformat() + 'Z'}
+    if _same_scope_conflict(record['user_id'], updated, exclude_id=kb_id):
+        return JSONResponse({'error': 'knowledge_base_exists_for_scope'}, status_code=409)
+    problem = _validate_knowledge_base(updated)
+    if problem is not None:
+        return problem
+    USER_KNOWLEDGE[kb_id] = updated
+    return _knowledge_base_view(updated)
+
+
+@app.delete('/api/knowledge-bases/{kb_id}')
+def delete_knowledge_base(kb_id: str):
+    if kb_id not in USER_KNOWLEDGE:
+        return JSONResponse({'error': 'knowledge_base_not_found'}, status_code=404)
+    del USER_KNOWLEDGE[kb_id]
+    return {'deleted': kb_id}
+
+
+@app.post('/api/knowledge-bases/{kb_id}/points')
+def upsert_knowledge_point(kb_id: str, body: KnowledgePointIn):
+    """Add a point, or replace the one with the same knowledge_id (which is also how a user
+    overrides a public point when the base extends a public partition)."""
+    record = USER_KNOWLEDGE.get(kb_id)
+    if not record:
+        return JSONResponse({'error': 'knowledge_base_not_found'}, status_code=404)
+    point = body.model_dump()
+    points = [item for item in record.get('knowledge_points', []) if item['knowledge_id'] != point['knowledge_id']] + [point]
+    updated = {**record, 'knowledge_points': points, 'updated_at': datetime.utcnow().isoformat() + 'Z'}
+    problem = _validate_knowledge_base(updated)
+    if problem is not None:
+        return problem
+    USER_KNOWLEDGE[kb_id] = updated
+    return _knowledge_base_view(updated)
+
+
+@app.delete('/api/knowledge-bases/{kb_id}/points/{knowledge_id}')
+def delete_knowledge_point(kb_id: str, knowledge_id: str):
+    record = USER_KNOWLEDGE.get(kb_id)
+    if not record:
+        return JSONResponse({'error': 'knowledge_base_not_found'}, status_code=404)
+    points = record.get('knowledge_points', [])
+    if all(item['knowledge_id'] != knowledge_id for item in points):
+        return JSONResponse({'error': 'knowledge_point_not_found'}, status_code=404)
+    updated = {**record, 'knowledge_points': [item for item in points if item['knowledge_id'] != knowledge_id], 'updated_at': datetime.utcnow().isoformat() + 'Z'}
+    problem = _validate_knowledge_base(updated)
+    if problem is not None:
+        # e.g. another user point still depends on the one being removed
+        return problem
+    USER_KNOWLEDGE[kb_id] = updated
+    return _knowledge_base_view(updated)
+
+
+@app.post('/api/knowledge-bases/import', status_code=201)
+def import_knowledge_base(file: UploadFile = File(...), user_id: str = Depends(current_user_id)):
+    """Create a user knowledge base from a YAML file in the same schema as the public partitions
+    (plus optional `extends_public` / `name`), so a base can be maintained in a file and re-imported."""
+    try:
+        payload = yaml.safe_load(file.file.read().decode('utf-8'))
+    except (UnicodeDecodeError, yaml.YAMLError) as exc:
+        return JSONResponse({'error': 'invalid_yaml', 'detail': str(exc)}, status_code=422)
+    if not isinstance(payload, dict):
+        return JSONResponse({'error': 'invalid_yaml', 'detail': 'top level must be a mapping'}, status_code=422)
+    try:
+        body = KnowledgeBaseIn(**{key: payload[key] for key in KNOWLEDGE_BASE_RECORD_FIELDS if key in payload and key != 'extends_public'}, extends_public=bool(payload.get('extends_public', False)))
+    except ValidationError as exc:
+        return JSONResponse({'error': 'invalid_knowledge_base', 'detail': str(exc)}, status_code=422)
+    return create_knowledge_base(body, user_id)
+
+
+@app.get('/api/knowledge-bases/{kb_id}/export')
+def export_knowledge_base(kb_id: str):
+    record = USER_KNOWLEDGE.get(kb_id)
+    if not record:
+        return JSONResponse({'error': 'knowledge_base_not_found'}, status_code=404)
+    payload = {field: record.get(field) for field in KNOWLEDGE_BASE_RECORD_FIELDS}
+    payload['version'] = payload['version'] or '1.0.0'
+    text = yaml.safe_dump(payload, allow_unicode=True, sort_keys=False)
+    return Response(text, media_type='application/x-yaml', headers={'Content-Disposition': f'attachment; filename="knowledge-base-{kb_id[:8]}.yaml"'})
+

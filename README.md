@@ -72,9 +72,10 @@ PYTHONPATH=. pytest -q
 - 未配置视觉解析器、请求失败或响应 JSON 无法解析时，结果明确标记为 `manual_confirmation_required`，不会伪造 OCR 成功。
 - **扫描版 PDF**（手机扫描/复印得到的、没有文字层的 PDF）会被自动识别：文字层为空但有页面的 PDF 不再按"空文本"处理，而是逐页渲染成图片（150 dpi）走视觉解析，再把各页结果合并回这一个上传资料（合并后的 `ocr_text` 按页拼接，题目按页顺序累加，置信度取最差一页）。有任何一页视觉解析没成功，整份资料标 `review_required` 并在 `warning` 里点名是第几页；一页都没成功、或者根本没配视觉解析，就和别的解析失败一样退到人工录入，`warning` 会写清楚原因（"该 PDF 为扫描件……未配置视觉解析"）。每页都是一次付费的视觉调用，所以默认最多识别前 30 页（`EXAM_DIAGNOSIS_SCANNED_PDF_MAX_PAGES` 可改），超出的页数会在 `warning` 里说明。视觉调用和其它角色一样记进 `/api/model-calls`（角色名 `vision`）并受同一份预算/限速约束。
 
-## 模型推理（题目切分 / 错因诊断 / 验证题生成 / 验证题批改 / 报告概述）
+## 模型推理（题目切分 / 错因诊断 / 验证题生成 / 验证题批改 / 报告概述 / 知识点匹配）
 
-- 按角色配置，五个角色互相独立，默认都不开启：
+- 按角色配置，六个角色互相独立，默认都不开启：
+  - `match`（题目→知识点语义匹配）：`EXAM_DIAGNOSIS_MATCH_API_KEY` / `EXAM_DIAGNOSIS_MATCH_BASE_URL` / `EXAM_DIAGNOSIS_MATCH_MODEL` / `EXAM_DIAGNOSIS_MATCH_TIMEOUT`（默认 `deepseek-v4-flash`，见"公共知识库与用户自维护知识库"）
   - `split`（题目切分）：`EXAM_DIAGNOSIS_SPLIT_API_KEY` / `EXAM_DIAGNOSIS_SPLIT_BASE_URL` / `EXAM_DIAGNOSIS_SPLIT_MODEL` / `EXAM_DIAGNOSIS_SPLIT_TIMEOUT`
   - `analysis`（错因诊断）：`EXAM_DIAGNOSIS_ANALYSIS_API_KEY` / `EXAM_DIAGNOSIS_ANALYSIS_BASE_URL` / `EXAM_DIAGNOSIS_ANALYSIS_MODEL` / `EXAM_DIAGNOSIS_ANALYSIS_TIMEOUT`
   - `verify`（验证题生成）：`EXAM_DIAGNOSIS_VERIFY_API_KEY` / `EXAM_DIAGNOSIS_VERIFY_BASE_URL` / `EXAM_DIAGNOSIS_VERIFY_MODEL` / `EXAM_DIAGNOSIS_VERIFY_TIMEOUT`
@@ -112,6 +113,15 @@ PYTHONPATH=. pytest -q
   - `EXAM_DIAGNOSIS_MODEL_DAILY_TOKEN_BUDGET`：当天（UTC）累计成功调用的 token 总数超过这个数，后续调用直接不发起，直接走各角色的兜底逻辑。
   - `EXAM_DIAGNOSIS_MODEL_MAX_CALLS_PER_MINUTE`：最近一分钟调用次数达到这个数，同样直接拦下。
 - 被拦下的调用不会真的碰网络，但会记一笔到 `/api/model-calls`，标 `blocked: true` 和具体原因（`daily_token_budget_exceeded` / `rate_limited`），不是悄无声息地就是不触发。
+
+## 公共知识库与用户自维护知识库
+
+- 两层：产品自带的**公共知识库**（`data/knowledge/*.yaml`，按阶段/科目/省份/课标年份分区）和每个用户**自己维护的知识库**（存在 SQLite 的 `user_knowledge` 表，按用户隔离）。当前公共库内容只是占位（14 个知识点），内容运营是产品成型后的事，这里做的是机制。
+- 用户库两种形态，由 `extends_public` 决定：**扩展公共库**（同一分区的公共知识点做底，用户的知识点叠加；`knowledge_id` 相同即覆盖公共定义，比如给某个知识点补关键词），或**独立库**（产品没覆盖的科目/省份，全部自己定义，必须给 `academic_year_range`）。同一用户同一分区只能有一个用户库（409）。
+- 解析规则：`find_partition(..., user_id=)` 先看用户库再看公共库，用户库存在就以它为准。创建任务、知识点匹配、报告的课程覆盖率、导出，用的都是这个"用户视角的有效分区"；`GET /api/knowledge-partitions` 列出的也是用户视角（用户库覆盖的分区标 `source: user`）。`GET /api/knowledge-partitions/points?stage&subject&province` 返回合并后的知识点，每个带 `origin: public|user`。
+- 管理接口：`GET/POST /api/knowledge-bases`，`GET/PUT/DELETE /api/knowledge-bases/{id}`，`POST /api/knowledge-bases/{id}/points`（新增或按 `knowledge_id` 覆盖），`DELETE /api/knowledge-bases/{id}/points/{knowledge_id}`，`POST /api/knowledge-bases/import`（上传与公共库同格式的 YAML，可带 `extends_public`/`name`），`GET /api/knowledge-bases/{id}/export`（YAML 下载）。每次写入都做完整校验（字段齐全、`knowledge_id` 唯一、`dependencies` 可解析——扩展公共库时可以引用公共 id、`grade_scope` 在年级范围内、置信度在 0-1），不合法返回 422 和具体原因；公共库更新导致某个用户库不再合法时，解析时跳过它退回公共库，管理接口的 `problem` 字段会说明原因。
+- 题目到知识点的匹配现在是**关键词 + 语义**：关键词命中一如既往；配置了 `match` 模型角色（`EXAM_DIAGNOSIS_MATCH_API_KEY`，默认 `deepseek-v4-flash`）时，把这道题和候选知识点列表（id/名称/章节/关键词）交给模型按语义挑选，结果和关键词命中合并——两边都命中的标 `keyword+model`，只有模型认出来的标 `model`（`matched_keywords` 为空，置信度取知识点置信度和模型把握的较小值）。模型不会删掉关键词命中；模型不可用/返回不合法就只剩关键词结果，不会瞎猜。`match` 和其它角色一样记进 `/api/model-calls`、受同一份预算约束。
+- 前端 `/knowledge` 页面：看所有分区和知识点，"在此之上建我的库"、添加/覆盖/删除知识点、导入/导出 YAML、删除自己的库（恢复为公共库）。
 
 ## 知识库分区
 

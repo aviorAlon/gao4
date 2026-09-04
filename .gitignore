@@ -6,6 +6,7 @@ venv/
 .env
 .env.*
 !.env.local.example
+!frontend/.env.verify
 data/*.db
 data/*.sqlite
 data/*.sqlite3

@@ -7,6 +7,7 @@ import SubmissionPage from './pages/SubmissionPage'
 import ExamPage from './pages/ExamPage'
 import ReportPage from './pages/ReportPage'
 import LoginPage from './pages/LoginPage'
+import KnowledgePage from './pages/KnowledgePage'
 import { fetchMe, getToken, logout, type MeResponse } from './api'
 
 /** Who the backend thinks we are, in the page's top-right corner. In the default local setup this
@@ -78,6 +79,7 @@ export default function App() {
         <AuthBar />
         <Routes>
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/knowledge" element={<KnowledgePage />} />
           <Route path="/" element={<HomePage />} />
           <Route path="/submissions/:id" element={<SubmissionPage />} />
           <Route path="/exams/:id" element={<ExamPage />} />

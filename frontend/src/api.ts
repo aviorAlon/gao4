@@ -236,12 +236,101 @@ export interface KnowledgePartition {
   version: string
   curriculum: string
   knowledge_point_count: number
-  resource: string
+  resource: string | null
+  source: 'public' | 'user'
+  // user partitions only
+  id?: string
+  name?: string | null
+  extends_public?: boolean
+  base_version?: string | null
+  user_point_count?: number
 }
 
 export async function listKnowledgePartitions(): Promise<KnowledgePartition[]> {
   const { data } = await api.get<{ partitions: KnowledgePartition[] }>('/api/knowledge-partitions')
   return data.partitions
+}
+
+// --- Knowledge bases (user-maintained partitions layered over the public registry) ---
+
+export interface KnowledgePoint {
+  knowledge_id: string
+  name: string
+  chapter: string
+  keywords: string[]
+  confidence: number
+  parent: string | null
+  dependencies: string[]
+  grade_scope: string
+  textbook_chapter: string
+  origin?: 'public' | 'user'
+}
+
+export interface KnowledgeScope { stage: string; subject: string; province: string; curriculum_year: number }
+
+export interface KnowledgeBase extends KnowledgeScope {
+  id: string
+  user_id: string
+  academic_year_range: string[]
+  extends_public: boolean
+  name: string
+  version: string
+  curriculum: string | null
+  knowledge_points: KnowledgePoint[]
+  created_at: string
+  updated_at: string
+  resolved: KnowledgePartition | null
+  problem: string | null
+}
+
+export interface KnowledgeBaseInput extends KnowledgeScope {
+  academic_year_range?: string[]
+  extends_public: boolean
+  name?: string
+  version?: string
+  curriculum?: string | null
+  knowledge_points?: Omit<KnowledgePoint, 'origin'>[]
+}
+
+export async function listKnowledgeBases(): Promise<KnowledgeBase[]> {
+  const { data } = await api.get<{ knowledge_bases: KnowledgeBase[] }>('/api/knowledge-bases')
+  return data.knowledge_bases
+}
+
+export async function createKnowledgeBase(input: KnowledgeBaseInput): Promise<KnowledgeBase> {
+  const { data } = await api.post<KnowledgeBase>('/api/knowledge-bases', input)
+  return data
+}
+
+export async function deleteKnowledgeBase(id: string): Promise<void> {
+  await api.delete(`/api/knowledge-bases/${id}`)
+}
+
+export async function upsertKnowledgePoint(id: string, point: Omit<KnowledgePoint, 'origin'>): Promise<KnowledgeBase> {
+  const { data } = await api.post<KnowledgeBase>(`/api/knowledge-bases/${id}/points`, point)
+  return data
+}
+
+export async function deleteKnowledgePoint(id: string, knowledgeId: string): Promise<KnowledgeBase> {
+  const { data } = await api.delete<KnowledgeBase>(`/api/knowledge-bases/${id}/points/${encodeURIComponent(knowledgeId)}`)
+  return data
+}
+
+export async function importKnowledgeBase(file: File): Promise<KnowledgeBase> {
+  const form = new FormData()
+  form.append('file', file)
+  const { data } = await api.post<KnowledgeBase>('/api/knowledge-bases/import', form)
+  return data
+}
+
+export function knowledgeBaseExportUrl(id: string) {
+  return `${API_BASE}/api/knowledge-bases/${id}/export`
+}
+
+/** Effective points for a scope as the current user sees them (public base + their own). */
+export async function listPartitionPoints(scope: KnowledgeScope): Promise<{ partition: KnowledgePartition; points: KnowledgePoint[] }> {
+  const { data } = await api.get('/api/knowledge-partitions/points', { params: scope })
+  return data
 }
 
 // --- Submissions (任务) ---

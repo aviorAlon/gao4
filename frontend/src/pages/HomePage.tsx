@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import {
   Button, Card, Empty, Form, Popconfirm, Select, Spin, Table, Tag, message,
 } from 'antd'
@@ -70,7 +70,13 @@ export default function HomePage() {
       <Masthead
         kicker="Exam Diagnosis · 诊断台"
         title="Exam Diagnosis"
-        meta={<span>{submissions.length ? `${submissions.length} 个任务在案` : '还没有任务'}</span>}
+        meta={
+          <>
+            <span>{submissions.length ? `${submissions.length} 个任务在案` : '还没有任务'}</span>
+            <span>·</span>
+            <Link to="/knowledge">知识库</Link>
+          </>
+        }
       />
 
       <SectionBlock marker="neutral" title="创建诊断任务">
