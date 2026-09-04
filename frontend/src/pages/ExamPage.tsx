@@ -5,11 +5,11 @@ import {
   Steps, Table, Tag, Typography, Upload, message,
 } from 'antd'
 import type { UploadFile } from 'antd'
-import { InboxOutlined, CheckCircleOutlined, UndoOutlined, LinkOutlined, PlusOutlined } from '@ant-design/icons'
+import { InboxOutlined, CheckCircleOutlined, UndoOutlined, LinkOutlined, PlusOutlined, DeleteOutlined, ReloadOutlined } from '@ant-design/icons'
 import {
-  confirmExam, createAnalysisRun, createUploadSession, confirmStartRun, finishUploadSession,
-  getExam, getParseDraft, linkOriginalSource, listExamAssets, listPages, listQuestionRecords,
-  reopenExam, replaceParseDraft, retryJob, runJobInBackground, updatePage, updateParseQuestion, updateQuestionRecord,
+  confirmExam, createAnalysisRun, createUploadSession, confirmStartRun, deleteAsset, finishUploadSession,
+  getExam, getParseDraft, linkOriginalSource, listExamAssets, listPages, listQuestionRecords, reparseExam,
+  reopenExam, replaceParseDraft, retryJob, runJobInBackground, updateAsset, updatePage, updateParseQuestion, updateQuestionRecord,
   uploadSessionAsset,
   type Asset, type DraftQuestion, type Exam, type ExamPage as ExamPageData, type Job, type QuestionInput, type QuestionRecord,
 } from '../api'
@@ -61,8 +61,10 @@ function UploadStep({ examId, onDone }: { examId: string; onDone: () => void }) 
     setProgress('上传中…')
     try {
       const session = await createUploadSession(examId)
-      for (const f of fileList) {
-        if (f.originFileObj) await uploadSessionAsset(session.id, f.originFileObj)
+      const files = fileList.filter((f) => f.originFileObj)
+      for (const [index, f] of files.entries()) {
+        await uploadSessionAsset(session.id, f.originFileObj!, (percent) =>
+          setProgress(`上传中 ${index + 1}/${files.length}：${f.name} ${percent}%`))
       }
       const finished = await finishUploadSession(session.id)
       if (!finished.job_id) throw new Error('未返回解析任务')
@@ -191,6 +193,8 @@ function PagesAndDraft({ exam, onConfirmed }: { exam: Exam; onConfirmed: () => v
   const [questions, setQuestions] = useState(exam.draft_questions)
   const [loading, setLoading] = useState(true)
   const [confirming, setConfirming] = useState(false)
+  const [reparsing, setReparsing] = useState(false)
+  const [reparseProgress, setReparseProgress] = useState<string | null>(null)
 
   async function reloadQuestions() {
     const draft = await getParseDraft(exam.id)
@@ -252,30 +256,95 @@ function PagesAndDraft({ exam, onConfirmed }: { exam: Exam; onConfirmed: () => v
     }
   }
 
+  async function reloadMaterials() {
+    const [p, a] = await Promise.all([listPages(exam.id), listExamAssets(exam.id)])
+    setPages(p.pages)
+    setAssets(a.assets)
+  }
+
+  async function onAssetTypeChange(assetId: string, materialType: string) {
+    await updateAsset(assetId, { material_type: materialType })
+    await reloadMaterials()
+  }
+
+  async function onDeleteAsset(assetId: string) {
+    await deleteAsset(assetId)
+    await reloadMaterials()
+    await reloadQuestions()
+    message.success('已删除；点"重新解析"让题目草稿跟着更新')
+  }
+
+  async function onReparse() {
+    setReparsing(true)
+    setReparseProgress('排队中…')
+    try {
+      const { job_id } = await reparseExam(exam.id)
+      await runJobInBackground(job_id, (job) => {
+        const running = job.stages.find((s) => s.status === 'running')
+        setReparseProgress(running ? STAGE_LABELS[running.name] ?? running.name : '排队中…')
+      })
+      message.success('重新解析完成')
+      onConfirmed()
+    } catch (e: any) {
+      message.error(e?.response?.data?.error === 'exam_has_no_assets' ? '没有资料可以解析' : e?.response?.data?.error ?? e.message ?? '重新解析失败')
+    } finally {
+      setReparsing(false)
+      setReparseProgress(null)
+    }
+  }
+
   if (loading) return <Spin />
+
+  const pageByAsset = new Map(pages.map((p) => [p.asset_id, p]))
+  const materialRows = [...assets].sort((a, b) => (a.page_order ?? 0) - (b.page_order ?? 0))
+  const mediaLabel = (a: Asset) => a.media_type === 'application/pdf' ? (a.scanned_pdf ? '扫描 PDF' : 'PDF') : a.media_type.startsWith('image/') ? '图片' : '文本'
 
   return (
     <>
-      <SectionBlock marker="neutral" title="页面与材料">
+      <SectionBlock marker={materialRows.some((a) => pageByAsset.get(a.id)?.review_required) ? 'caution' : 'neutral'} title={`资料（${materialRows.length} 份）`}>
         <Card>
-          <Table
-            rowKey="id" size="small" pagination={false} dataSource={pages}
-            columns={[
-              { title: '页', dataIndex: 'page_order', width: 60, render: (v) => <span className="data-figure">{v}</span> },
-              { title: '材料类型', render: (_, p: ExamPageData) => (
-                <Select
-                  size="small" value={p.material_type} style={{ width: 130 }}
-                  options={MATERIAL_TYPE_OPTIONS}
-                  onChange={(v) => onPageChange(p.id, { material_type: v })}
-                />
-              ) },
-              { title: '计入解析统计', render: (_, p: ExamPageData) => (
-                <Checkbox checked={p.include_in_analysis} onChange={(e) => onPageChange(p.id, { include_in_analysis: e.target.checked })} />
-              ) },
-              { title: '状态', render: (_, p: ExamPageData) => p.review_required
-                ? <Tag color="gold">需人工确认</Tag> : <Tag color="green">已解析</Tag> },
-            ]}
-          />
+          <Flex vertical gap="middle">
+            <Table
+              rowKey="id" size="small" pagination={false} dataSource={materialRows}
+              columns={[
+                { title: '页', dataIndex: 'page_order', width: 56, render: (v) => <span className="data-figure">{v}</span> },
+                { title: '文件', render: (_, a: Asset) => (
+                  <Flex vertical gap={2}>
+                    <Flex align="center" gap={6}><span>{a.filename}</span><Tag>{mediaLabel(a)}</Tag></Flex>
+                    {(pageByAsset.get(a.id)?.warning || a.ocr_warning) && (
+                      <Text type="warning" style={{ fontSize: 12 }}>{pageByAsset.get(a.id)?.warning || a.ocr_warning}</Text>
+                    )}
+                  </Flex>
+                ) },
+                { title: '材料类型', width: 150, render: (_, a: Asset) => (
+                  <Select
+                    size="small" value={pageByAsset.get(a.id)?.material_type ?? a.material_type ?? 'unknown'} style={{ width: 130 }}
+                    options={MATERIAL_TYPE_OPTIONS}
+                    onChange={(v) => onAssetTypeChange(a.id, v)}
+                  />
+                ) },
+                { title: '计入解析统计', width: 110, render: (_, a: Asset) => {
+                  const p = pageByAsset.get(a.id)
+                  return p ? <Checkbox checked={p.include_in_analysis} onChange={(e) => onPageChange(p.id, { include_in_analysis: e.target.checked })} /> : <Text type="secondary">—</Text>
+                } },
+                { title: '状态', width: 110, render: (_, a: Asset) => {
+                  const p = pageByAsset.get(a.id)
+                  if (!p) return <Tag>未解析</Tag>
+                  return p.review_required ? <Tag color="gold">需人工确认</Tag> : <Tag color="green">已解析</Tag>
+                } },
+                { title: '', width: 48, render: (_, a: Asset) => (
+                  <Popconfirm title="删除这份资料？其页面和来自它的题目草稿会一起移除。" onConfirm={() => onDeleteAsset(a.id)}>
+                    <Button danger type="text" size="small" icon={<DeleteOutlined />} />
+                  </Popconfirm>
+                ) },
+              ]}
+            />
+            <Flex align="center" gap="middle" wrap>
+              <Button icon={<ReloadOutlined />} onClick={onReparse} loading={reparsing} disabled={!materialRows.length}>重新解析全部资料</Button>
+              {reparseProgress && <Text type="secondary">{reparseProgress}</Text>}
+              <Text type="secondary">删除资料、改材料类型或配好视觉解析之后，重新解析会重建页面和题目草稿（人工补录的题目保留）。</Text>
+            </Flex>
+          </Flex>
         </Card>
       </SectionBlock>
 

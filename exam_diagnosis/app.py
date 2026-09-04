@@ -479,6 +479,13 @@ def delete_asset(asset_id: str):
     for page_id, page in list(PAGES.items()):
         if page['asset_id'] == asset_id:
             del PAGES[page_id]
+    # Draft questions that came from this asset go with it. rebuild_draft_questions keeps any
+    # draft whose source asset it doesn't know about, treating it as manually entered — so left
+    # in place, a deleted scan's questions would survive every re-parse as phantom "manual" ones.
+    exam = EXAMS.get(asset['exam_id'])
+    if exam is not None and exam.get('draft_questions'):
+        exam['draft_questions'] = [item for item in exam['draft_questions'] if (item.get('original_source') or {}).get('asset_id') != asset_id]
+        EXAMS[exam['id']] = exam
     del ASSETS[asset_id]
     return {'deleted': True, 'asset_id': asset_id}
 
@@ -538,21 +545,44 @@ def finish_upload_session(session_id: str):
         return JSONResponse({'error': 'upload_session_empty'}, status_code=422)
     session['status'] = 'processing'
     session['asset_count'] = len(session['asset_ids'])
-    EXAMS[session['exam_id']]['status'] = 'parsing'
+    job_id = _create_parse_job(session['exam_id'], session.get('user_id', LOCAL_USER_ID), upload_session_id=session_id)
+    session['job_id'] = job_id
+    UPLOAD_SESSIONS[session_id] = session
+    return session
+
+def _create_parse_job(exam_id: str, user_id: str, upload_session_id: str | None = None) -> str:
+    """A parse job always works on every asset the exam currently has (not just one session's),
+    so the same job shape serves both "finished uploading" and "parse these again"."""
+    EXAMS[exam_id]['status'] = 'parsing'
     job_id = str(uuid4())
     JOBS[job_id] = {
-        'id': job_id, 'job_type': 'parse_exam', 'exam_id': session['exam_id'],
-        'user_id': session.get('user_id', LOCAL_USER_ID),
-        'upload_session_id': session_id, 'status': 'queued', 'attempt': 1,
+        'id': job_id, 'job_type': 'parse_exam', 'exam_id': exam_id,
+        'user_id': user_id,
+        'upload_session_id': upload_session_id, 'status': 'queued', 'attempt': 1,
         'stages': [
             {'name': 'classify', 'status': 'queued', 'error': None},
             {'name': 'ocr', 'status': 'queued', 'error': None},
             {'name': 'question_split', 'status': 'queued', 'error': None},
         ],
     }
-    session['job_id'] = job_id
-    UPLOAD_SESSIONS[session_id] = session
-    return session
+    return job_id
+
+
+@app.post('/api/exams/{eid}/reparse', status_code=201)
+def reparse_exam(eid: str):
+    """Queue a fresh parse of the exam's current assets — after deleting a bad scan, adding the
+    vision model, or changing an asset's type. A confirmed exam must be reopened first, since
+    re-parsing replaces the pages and draft questions the confirmation was based on."""
+    exam = EXAMS.get(eid)
+    if not exam:
+        return JSONResponse({'error': 'exam_not_found'}, status_code=404)
+    if exam['status'] == 'confirmed':
+        return JSONResponse({'error': 'exam_confirmed', 'hint': 'reopen the exam before re-parsing'}, status_code=409)
+    if not assets_for_exam(eid):
+        return JSONResponse({'error': 'exam_has_no_assets'}, status_code=422)
+    job_id = _create_parse_job(eid, exam.get('user_id', LOCAL_USER_ID))
+    return {'job_id': job_id, 'job': JOBS[job_id], 'exam_id': eid, 'asset_count': len(assets_for_exam(eid))}
+
 
 @app.get('/api/jobs/{job_id}')
 def get_job(job_id: str):
@@ -727,10 +757,12 @@ def classify_filename(filename: str) -> str:
 
 
 def assets_for_exam(exam_id: str):
-    return [asset for asset in ASSETS.values() if asset['exam_id'] == exam_id]
+    # SQLiteMapping iterates in set order, so without an explicit sort the parse order — and
+    # with it the draft question order — varied from run to run.
+    return sorted((asset for asset in ASSETS.values() if asset['exam_id'] == exam_id), key=lambda asset: (asset.get('page_order') or 0, asset.get('filename', ''), asset['id']))
 
 def pages_for_exam(exam_id: str):
-    return [page for page in PAGES.values() if page['exam_id'] == exam_id]
+    return sorted((page for page in PAGES.values() if page['exam_id'] == exam_id), key=lambda page: (page.get('page_order') or 0, page['id']))
 
 def rebuild_draft_questions(exam_id: str) -> dict:
     """Pages the user or the parser ruled out stay visible but never reach the draft."""

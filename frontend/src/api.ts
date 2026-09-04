@@ -431,10 +431,37 @@ export async function reopenExam(examId: string): Promise<{ id: string; status: 
 
 // --- Assets ---
 
-export interface Asset { id: string; exam_id: string; filename: string; media_type: string; material_type?: string }
+export interface Asset {
+  id: string
+  exam_id: string
+  filename: string
+  media_type: string
+  material_type?: string
+  page_order?: number
+  ocr_status?: string
+  ocr_warning?: string
+  scanned_pdf?: boolean
+  upload_session_id?: string
+}
 
 export async function listExamAssets(examId: string): Promise<{ assets: Asset[] }> {
   const { data } = await api.get(`/api/exams/${examId}/assets`)
+  return data
+}
+
+export async function updateAsset(assetId: string, changes: { material_type?: string; page_order?: number }): Promise<Asset> {
+  const { data } = await api.patch<Asset>(`/api/assets/${assetId}`, changes)
+  return data
+}
+
+export async function deleteAsset(assetId: string): Promise<void> {
+  await api.delete(`/api/assets/${assetId}`)
+}
+
+/** Queue a fresh parse of the exam's current assets (after deleting/re-typing one). Returns the
+ * job to enqueue; a confirmed exam must be reopened first (409 exam_confirmed). */
+export async function reparseExam(examId: string): Promise<{ job_id: string; job: Job; asset_count: number }> {
+  const { data } = await api.post(`/api/exams/${examId}/reparse`)
   return data
 }
 
@@ -452,10 +479,14 @@ export async function createUploadSession(examId: string): Promise<UploadSession
   return data
 }
 
-export async function uploadSessionAsset(sessionId: string, file: File) {
+export async function uploadSessionAsset(sessionId: string, file: File, onProgress?: (percent: number) => void) {
   const form = new FormData()
   form.append('file', file)
-  const { data } = await api.post(`/api/upload-sessions/${sessionId}/assets`, form)
+  const { data } = await api.post(`/api/upload-sessions/${sessionId}/assets`, form, {
+    onUploadProgress: (event) => {
+      if (onProgress && event.total) onProgress(Math.round((event.loaded / event.total) * 100))
+    },
+  })
   return data
 }
 
@@ -526,6 +557,8 @@ export async function retryJob(jobId: string): Promise<Job> {
 // --- Parsed pages ---
 
 export interface ExamPage {
+  /** The parser's own reason a page needs a human (scanned PDF without vision, unreadable pages…). */
+  warning?: string
   id: string
   asset_id: string
   page_order: number
