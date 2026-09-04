@@ -77,6 +77,8 @@ export default function HomePage() {
             <Link to="/knowledge">知识库</Link>
             <span>·</span>
             <Link to="/status">系统状态</Link>
+            <span>·</span>
+            <Link to="/settings">设置</Link>
           </>
         }
       />

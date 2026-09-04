@@ -58,9 +58,11 @@ PYTHONPATH=. pytest -q
 
 ## 数据与配置
 
-- SQLite 默认位置：`data/exam_diagnosis.sqlite3`
-- 可通过 `EXAM_DIAGNOSIS_DB` 指定数据库路径。
-- 上传文件默认写入 `data/uploads/`，该目录被 `.gitignore` 忽略。
+- 所有可写数据在一个根目录下：`EXAM_DIAGNOSIS_DATA_DIR`，默认是当前目录下的 `data/`（网页部署一直就是这样，不设就不变）。桌面版把它指到用户的应用数据目录。
+- SQLite 默认位置：`<data_dir>/exam_diagnosis.sqlite3`，`EXAM_DIAGNOSIS_DB` 可单独指定。
+- 上传文件写入 `<data_dir>/uploads/`（`data/` 下的这些都被 `.gitignore` 忽略）。
+- **设置页**（前端 `/settings`，接口 `GET/PUT /api/settings`）：模型各角色的 API key / 模型 / 接口地址 / 超时，以及成本预算，可以在界面里填，保存到 `<data_dir>/config.json`，保存即生效不用重启。key 只回报"已设置/未设置"和来源，永远不回传明文。优先级：环境变量（含 `.env.local`）> `config.json`——被环境变量设定的项在设置页里锁定不可改（硬存也不会生效，所以直接拒绝并说明）。`EXAM_DIAGNOSIS_AUTH_REQUIRED` 开启的多用户模式下设置页只读，服务器范围的配置由部署者通过环境变量管理。
+- `GET /api/health`：存活检查，无需鉴权，返回版本和数据目录；`python -m exam_diagnosis.server --port 0 --data-dir X` 是给桌面壳用的启动入口（自动挑空闲端口并在 stdout 打 `LISTENING host:port`），网页部署照旧用 `uvicorn exam_diagnosis.app:app`。
 - 知识库资源目录：`data/knowledge/`，可通过 `EXAM_DIAGNOSIS_KNOWLEDGE_DIR` 指定。
 - 目录下每个 YAML 是一个知识库分区，必须声明 `stage`、`subject`、`province`、`curriculum_year`、`academic_year_range`、`version` 和 `knowledge_points`；同一组 `stage/subject/province/curriculum_year` 只允许一个分区。
 - 当前随仓库发布的分区只有 `high_math_guangdong_v1.yaml`（高中 / 数学 / 广东 / 2017 课标），但代码不写死该分区，新增 YAML 即可启用新的阶段、科目、省份或课程方案年份。

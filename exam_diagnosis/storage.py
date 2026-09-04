@@ -8,12 +8,13 @@ from collections.abc import MutableMapping, Iterator
 from pathlib import Path
 from typing import Any
 
+from . import paths
+
 
 class SQLiteMapping(MutableMapping[str, dict[str, Any]]):
     def __init__(self, name: str, path: str | None = None):
         self.name = name
-        configured = path or os.getenv("EXAM_DIAGNOSIS_DB", "data/exam_diagnosis.sqlite3")
-        self.path = Path(configured).resolve()
+        self.path = Path(path).resolve() if path else paths.database_path()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._cache: dict[str, dict[str, Any]] = {}
         with self._connect() as conn:

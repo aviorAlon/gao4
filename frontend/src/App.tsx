@@ -13,6 +13,7 @@ const ReportPage = lazy(() => import('./pages/ReportPage'))
 const LoginPage = lazy(() => import('./pages/LoginPage'))
 const KnowledgePage = lazy(() => import('./pages/KnowledgePage'))
 const StatusPage = lazy(() => import('./pages/StatusPage'))
+const SettingsPage = lazy(() => import('./pages/SettingsPage'))
 
 /** Who the backend thinks we are, in the page's top-right corner. In the default local setup this
  * says "本地用户" and offers a login link; with a session it names the account and offers logout. */
@@ -86,6 +87,7 @@ export default function App() {
             <Route path="/login" element={<LoginPage />} />
             <Route path="/knowledge" element={<KnowledgePage />} />
             <Route path="/status" element={<StatusPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
             <Route path="/" element={<HomePage />} />
             <Route path="/submissions/:id" element={<SubmissionPage />} />
             <Route path="/exams/:id" element={<ExamPage />} />

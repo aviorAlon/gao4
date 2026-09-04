@@ -56,6 +56,8 @@ export default function StatusPage() {
           <>
             <span>{status ? `${status.application.name} v${status.application.version}` : ''}</span>
             <span>·</span>
+            <Link to="/settings">设置</Link>
+            <span>·</span>
             <Link to="/">返回诊断台</Link>
           </>
         }
@@ -74,7 +76,7 @@ export default function StatusPage() {
             <Alert type="error" showIcon title="模型调用当前被拦下" description={ERROR_TEXT[status.budget.block_reason] ?? status.budget.block_reason} style={{ marginBottom: 16 }} />
           )}
           {configuredRoles === 0 && (
-            <Alert type="warning" showIcon title="没有任何模型角色配置了 API key" description="所有环节都在走本地兜底逻辑（正则切题、关键词错因、模板验证题）。在 .env.local 里填上对应角色的 EXAM_DIAGNOSIS_<ROLE>_API_KEY 后重启后端。" style={{ marginBottom: 16 }} />
+            <Alert type="warning" showIcon title="没有任何模型角色配置了 API key" description={<span>所有环节都在走本地兜底逻辑（正则切题、关键词错因、模板验证题）。到<Link to="/settings">设置页</Link>填入对应角色的 API key 即可启用，不用重启；也可以写在 .env.local 里。</span>} style={{ marginBottom: 16 }} />
           )}
 
           <SectionBlock marker={configuredRoles ? 'resolved' : 'caution'} title="模型角色">

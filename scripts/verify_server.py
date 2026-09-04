@@ -11,7 +11,9 @@ sys.path.insert(0, str(ROOT))
 os.chdir(ROOT)
 
 state_dir = Path(tempfile.mkdtemp(prefix='exam_diagnosis_verify_'))
-os.environ['EXAM_DIAGNOSIS_DB'] = str(state_dir / 'verify.sqlite3')
+# Everything writable — database, uploads, config.json from the settings page — stays in the
+# temp dir; nothing from a verification session may land in the repo's data/.
+os.environ['EXAM_DIAGNOSIS_DATA_DIR'] = str(state_dir)
 # app.py loads .env.local from the cwd via setdefault — a real key sitting there must never make
 # this throwaway server spend money. An empty value counts as "unset" for client_from_env and
 # blocks setdefault from filling it in.

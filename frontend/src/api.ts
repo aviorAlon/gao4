@@ -288,6 +288,57 @@ export async function listTasks(limit = 50): Promise<{ tasks: TaskRecord[]; work
   return data
 }
 
+// --- Runtime settings (model keys / budget, stored in <data_dir>/config.json) ---
+
+export type SettingSource = 'env' | 'config' | null
+
+export interface RoleSettings {
+  role: string
+  purpose: string
+  api_key_set: boolean
+  api_key_source: SettingSource
+  base_url: string | null
+  base_url_default: string | null
+  base_url_source: SettingSource
+  model: string | null
+  model_default: string | null
+  model_source: SettingSource
+  timeout: number | null
+  timeout_default: number
+  timeout_source: SettingSource
+  configured: boolean
+  /** The key comes from the environment: config.json can't override it, so the UI must not offer to. */
+  locked: boolean
+}
+
+export interface SettingsResponse {
+  roles: RoleSettings[]
+  budget: {
+    daily_token_budget: number | null
+    daily_token_budget_source: SettingSource
+    max_calls_per_minute: number | null
+    max_calls_per_minute_source: SettingSource
+  }
+  config_path: string
+  auth_required: boolean
+  writable: boolean
+}
+
+export interface SettingsUpdate {
+  roles?: Record<string, { api_key?: string; base_url?: string | null; model?: string | null; timeout?: number | string | null }>
+  budget?: { daily_token_budget?: number | null; max_calls_per_minute?: number | null }
+}
+
+export async function fetchSettings(): Promise<SettingsResponse> {
+  const { data } = await api.get<SettingsResponse>('/api/settings')
+  return data
+}
+
+export async function updateSettings(update: SettingsUpdate): Promise<SettingsResponse> {
+  const { data } = await api.put<SettingsResponse>('/api/settings', update)
+  return data
+}
+
 // --- Knowledge partitions ---
 
 export interface KnowledgePartition {

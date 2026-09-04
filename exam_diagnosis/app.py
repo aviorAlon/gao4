@@ -24,6 +24,8 @@ from .review import APPROVED, NEEDS_REVIEW, review_report, withhold_unreviewed_a
 from .llm import ROLE_DEFAULTS, client_from_env, role_status as llm_role_status
 from .reporting import generate_report_summary
 from .env_file import load_env_file
+from . import paths
+from . import settings as app_settings
 
 # Loaded once at import time, before anything below reads os.environ — lets model-role API keys
 # live in a gitignored .env.local file instead of needing `$env:...` set by hand every session.
@@ -39,6 +41,9 @@ from .env_file import load_env_file
 # live here, not just in a conftest fixture that only runs once per session.
 if 'pytest' not in sys.modules:
     load_env_file()
+    # Then <data_dir>/config.json (the settings page's storage) — same guard, same reason, and it
+    # only fills in what the environment/.env.local didn't set (see settings.apply_config).
+    app_settings.apply_config(app_settings.load_config())
 
 LOCAL_USER_ID = 'local'
 USER_HEADER = 'X-User-Id'
@@ -51,7 +56,7 @@ USER_HEADER = 'X-User-Id'
 #     than one real person).
 AUTH_REQUIRED = os.getenv('EXAM_DIAGNOSIS_AUTH_REQUIRED', '').strip().lower() in ('1', 'true', 'yes', 'on')
 SESSION_TTL_HOURS = float(os.getenv('EXAM_DIAGNOSIS_SESSION_TTL_HOURS') or 24 * 30)
-PUBLIC_PATHS = frozenset({'/api/auth/register', '/api/auth/login'})
+PUBLIC_PATHS = frozenset({'/api/auth/register', '/api/auth/login', '/api/health'})
 LOGIN_THROTTLE = auth.LoginThrottle()
 
 
@@ -156,8 +161,19 @@ def record_model_call(user_id: str | None = None, **context: Any):
 # configured it. Global across all four roles and the current user, not per-role — a single
 # combined ceiling is what "don't overspend" actually means for a local single-user MVP; splitting
 # it per role would just mean picking four numbers that have to individually add up right anyway.
-MODEL_DAILY_TOKEN_BUDGET = int(os.getenv('EXAM_DIAGNOSIS_MODEL_DAILY_TOKEN_BUDGET') or 0) or None
-MODEL_MAX_CALLS_PER_MINUTE = int(os.getenv('EXAM_DIAGNOSIS_MODEL_MAX_CALLS_PER_MINUTE') or 0) or None
+MODEL_DAILY_TOKEN_BUDGET: int | None = None
+MODEL_MAX_CALLS_PER_MINUTE: int | None = None
+
+
+def _refresh_budget_from_env() -> None:
+    """Re-read the two budget knobs — at import, and again whenever the settings page changes
+    them (settings.apply_config writes the environment; these globals are what the gate reads)."""
+    global MODEL_DAILY_TOKEN_BUDGET, MODEL_MAX_CALLS_PER_MINUTE
+    MODEL_DAILY_TOKEN_BUDGET = int(os.getenv('EXAM_DIAGNOSIS_MODEL_DAILY_TOKEN_BUDGET') or 0) or None
+    MODEL_MAX_CALLS_PER_MINUTE = int(os.getenv('EXAM_DIAGNOSIS_MODEL_MAX_CALLS_PER_MINUTE') or 0) or None
+
+
+_refresh_budget_from_env()
 
 
 def _budget_block_reason(user_id: str) -> str | None:
@@ -261,7 +277,7 @@ def parse_academic_year_range(label: str) -> dict | None:
 
 def safe_remove_asset_file(asset: dict):
     path = Path(asset.get('storage_path', '')).resolve()
-    allowed_root = (Path.cwd() / 'data' / 'uploads').resolve()
+    allowed_root = paths.uploads_dir()
     try:
         path.relative_to(allowed_root)
     except ValueError:
@@ -445,7 +461,7 @@ def list_submission_exams(sid: str):
 @app.post('/api/exams/{eid}/assets')
 def upload_asset(eid: str, file: UploadFile = File(...)):
     if eid not in EXAMS: return JSONResponse({'error':'exam_not_found'},status_code=404)
-    aid=str(uuid4()); data=Path('data/uploads')/eid; data.mkdir(parents=True,exist_ok=True); filename=Path(file.filename).name; path=data/filename
+    aid=str(uuid4()); data=paths.uploads_dir()/eid; data.mkdir(parents=True,exist_ok=True); filename=Path(file.filename).name; path=data/filename
     path.write_bytes(file.file.read()); item={'id':aid,'exam_id':eid,'user_id':EXAMS[eid].get('user_id',LOCAL_USER_ID),'filename':filename,'storage_path':str(path),'media_type':file.content_type,'status':'received'}; ASSETS[aid]=item; return item
 
 @app.get('/api/exams/{eid}/assets')
@@ -520,7 +536,7 @@ def upload_session_asset(session_id: str, file: UploadFile = File(...)):
         return JSONResponse({'error': 'duplicate_asset', 'duplicate_asset_id': duplicate['id'], 'duplicate_filename': duplicate['filename'], 'sha256': digest}, status_code=409)
     exam_id = session['exam_id']
     aid = str(uuid4())
-    data = Path('data/uploads') / exam_id / session_id
+    data = paths.uploads_dir() / exam_id / session_id
     data.mkdir(parents=True, exist_ok=True)
     path = data / filename
     path.write_bytes(content)
@@ -1729,7 +1745,7 @@ def system_status(user_id: str = Depends(current_user_id)):
     return {
         'application': {'name': app.title, 'version': app.version},
         'auth': {'required': AUTH_REQUIRED, 'session_ttl_hours': SESSION_TTL_HOURS},
-        'storage': {'database': str(SUBMISSIONS.path), 'uploads': str((Path.cwd() / 'data' / 'uploads').resolve())},
+        'storage': {'data_dir': str(paths.data_dir()), 'database': str(SUBMISSIONS.path), 'uploads': str(paths.uploads_dir()), 'config': str(paths.config_path())},
         'model_roles': roles,
         'budget': {
             'daily_token_budget': MODEL_DAILY_TOKEN_BUDGET,
@@ -1743,3 +1759,43 @@ def system_status(user_id: str = Depends(current_user_id)):
         },
         'knowledge': {'partitions': available_partitions(user_id=user_id)},
     }
+
+
+# --- Health + runtime settings --------------------------------------------------------------------
+
+
+@app.get('/api/health')
+def health():
+    """Liveness for whatever supervises this process (the desktop shell polls it after spawning
+    the backend). Public: no auth, no user context."""
+    return {'status': 'ok', 'application': app.title, 'version': app.version, 'data_dir': str(paths.data_dir())}
+
+
+class SettingsIn(BaseModel):
+    roles: dict[str, dict[str, Any]] = {}
+    budget: dict[str, Any] = {}
+
+
+@app.get('/api/settings')
+def get_settings():
+    return {**app_settings.describe(), 'auth_required': AUTH_REQUIRED, 'writable': not AUTH_REQUIRED}
+
+
+@app.put('/api/settings')
+def update_settings(body: SettingsIn):
+    """Change model credentials / budget from the UI. Refused in multi-user mode: these are
+    server-wide, and a shared server is configured by its operator through the environment, not
+    by whichever account happens to be logged in."""
+    if AUTH_REQUIRED:
+        return JSONResponse({'error': 'settings_locked_in_multi_user_mode'}, status_code=403)
+    locked = app_settings.locked_fields(body.roles, body.budget)
+    if locked:
+        return JSONResponse({'error': 'locked_by_environment', 'fields': locked}, status_code=409)
+    try:
+        config = app_settings.merge_changes(app_settings.load_config(), body.model_dump())
+    except ValueError as exc:
+        return JSONResponse({'error': 'invalid_settings', 'detail': str(exc)}, status_code=422)
+    app_settings.save_config(config)
+    app_settings.apply_config(config)
+    _refresh_budget_from_env()
+    return get_settings()
