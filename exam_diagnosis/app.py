@@ -4,6 +4,8 @@ from typing import Any
 from uuid import uuid4
 import re
 import hashlib
+import sys
+import threading
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
@@ -21,7 +23,17 @@ from .env_file import load_env_file
 # Loaded once at import time, before anything below reads os.environ — lets model-role API keys
 # live in a gitignored .env.local file instead of needing `$env:...` set by hand every session.
 # Real environment variables still win if both are set (see env_file.load_env_file).
-load_env_file()
+#
+# Never under pytest, though: this repo's own .env.local (or anyone else's, sitting in whatever
+# directory tests happen to run from) must never reach a test process. A real key loaded here
+# means client_from_env() stops returning None in tests, and every test that reaches report
+# generation silently makes real, paid calls to the model provider instead of exercising the
+# fallback path it was written to test — discovered the hard way as a "hung" test suite that was
+# actually just waiting tens of seconds per test on real DeepSeek responses. `importlib.reload`
+# of this module (see test_app.py's restart test) re-runs this exact line, so this guard has to
+# live here, not just in a conftest fixture that only runs once per session.
+if 'pytest' not in sys.modules:
+    load_env_file()
 
 LOCAL_USER_ID = 'local'
 USER_HEADER = 'X-User-Id'
@@ -45,6 +57,16 @@ MODEL_CALLS = SQLiteMapping('model_calls')
 _PERSISTENT_MAPPINGS = (SUBMISSIONS, EXAMS, ASSETS, RUNS, UPLOAD_SESSIONS, JOBS, PAGES, QUESTION_RECORDS, VERIFICATION_QUESTIONS, MASTERY_RECORDS, MODEL_CALLS)
 
 MODEL_CALLS_MAX = 500
+
+# FastAPI runs sync `def` route handlers in a thread pool, so two near-simultaneous GET requests
+# for the same not-yet-generated report both run get_analysis_report concurrently. Report
+# generation now makes real, paid model calls and can take tens of seconds (deepseek-v4-pro's
+# thinking mode is not fast) — a wide enough window that both requests can pass the
+# `status == 'queued'` check before either has flipped it, and both pay to regenerate the same
+# report. One process-wide lock serializes just the check-and-claim step (not the generation
+# itself), which is enough for a local single-user MVP where true concurrent report generation
+# is rare in the first place.
+_REPORT_GENERATION_LOCK = threading.Lock()
 
 
 def record_model_call(user_id: str | None = None, **context: Any):
@@ -864,18 +886,35 @@ def get_analysis_report(rid: str):
     run = RUNS.get(rid)
     if not run:
         return JSONResponse({'error': 'run_not_found'}, status_code=404)
-    if run['status'] == 'report_ready' and run.get('report'):
-        return run['report']
-    if run['status'] != 'queued':
-        return JSONResponse({'error': 'analysis_not_started'}, status_code=409)
-    submission = SUBMISSIONS[run['submission_id']]
-    partition = find_partition(submission['stage'], submission['subject'], submission['province'], submission.get('curriculum_year'))
-    if partition is None:
-        return JSONResponse({'error': 'knowledge_partition_not_found', 'requested': {'stage': submission['stage'], 'subject': submission['subject'], 'province': submission['province']}, 'available_partitions': available_partitions()}, status_code=422)
-    selected = run.get('exam_versions') or exam_versions(run['exam_ids'])
-    current = exam_versions(run['exam_ids'])
-    if current != selected:
-        return JSONResponse({'error': 'exam_versions_changed', 'selected': selected, 'current': current}, status_code=409)
+    with _REPORT_GENERATION_LOCK:
+        if run['status'] == 'report_ready' and run.get('report'):
+            return run['report']
+        if run['status'] != 'queued':
+            # Covers both a run that was never confirm-started (still awaiting_confirmation) and
+            # one another concurrent request has already claimed (status == 'generating') — either
+            # way, this request must not start a second, independently-paid generation.
+            return JSONResponse({'error': 'analysis_not_started'}, status_code=409)
+        run['status'] = 'generating'
+        RUNS[rid] = run
+    try:
+        submission = SUBMISSIONS[run['submission_id']]
+        partition = find_partition(submission['stage'], submission['subject'], submission['province'], submission.get('curriculum_year'))
+        if partition is None:
+            return JSONResponse({'error': 'knowledge_partition_not_found', 'requested': {'stage': submission['stage'], 'subject': submission['subject'], 'province': submission['province']}, 'available_partitions': available_partitions()}, status_code=422)
+        selected = run.get('exam_versions') or exam_versions(run['exam_ids'])
+        current = exam_versions(run['exam_ids'])
+        if current != selected:
+            return JSONResponse({'error': 'exam_versions_changed', 'selected': selected, 'current': current}, status_code=409)
+        return _generate_report(rid, run, submission, partition, selected)
+    finally:
+        # Any early return or exception above leaves run['status'] at 'generating' — revert to
+        # 'queued' so the next GET can retry instead of the run being permanently stuck unclaimed.
+        if run['status'] == 'generating':
+            run['status'] = 'queued'
+            RUNS[rid] = run
+
+
+def _generate_report(rid: str, run: dict, submission: dict, partition, selected: list[dict]) -> dict:
     records = [
         record for exam_id in run['exam_ids']
         for record in QUESTION_RECORDS.values()
@@ -931,6 +970,7 @@ def get_analysis_report(rid: str):
     report['verification_questions'] = [withhold_unreviewed_answer(item) for item in report['verification_questions']]
     run['status'] = 'report_ready'
     run['report'] = report
+    RUNS[rid] = run
     return report
 
 def refresh_report_verification_questions(rid: str):
