@@ -478,6 +478,8 @@ export default function ReportPage() {
           <Space>
             <a href={`${API_BASE}/api/reports/${report.analysis_run_id}/export?format=md`}>导出 Markdown</a>
             <a href={`${API_BASE}/api/reports/${report.analysis_run_id}/export?format=html`}>导出 HTML</a>
+            <a href={`${API_BASE}/api/reports/${report.analysis_run_id}/export?format=pdf`}>导出 PDF</a>
+            <a href={`${API_BASE}/api/reports/${report.analysis_run_id}/export?format=docx`}>导出 Word</a>
           </Space>
         </>
       )}

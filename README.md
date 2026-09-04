@@ -89,6 +89,12 @@ PYTHONPATH=. pytest -q
 - 五个角色都遵循和视觉解析一致的规则：没配置、请求失败、响应不是合法 JSON 或不满足预期结构时一律判定为不可用，自动退回各自的兜底逻辑，不会伪造成功。`split` 的兜底是内置的正则匹配（覆盖"第N题"/"N题"/"N."/"N、"/"N．"），但正则结果一律标记 `review_required`，需要人工确认切分是否准确、完整——不能因为规则跑完了就当成解析可信；`verify` 的兜底是原来那句固定模板；`grade` 的兜底是学生自评的分数。
 - 这些 `API_KEY` 不想每次开新终端都用 `$env:...` 重设的话，可以复制 [`.env.local.example`](.env.local.example) 为同目录下的 `.env.local`，把占位符换成真实 key。`.env.local` 已经在 `.gitignore` 的 `.env.*` 规则里，不会被提交；启动时会自动加载，真实的环境变量（如果两边都设了）优先于文件里的值。
 
+## 报告导出
+
+- `GET /api/reports/{run_id}/export?format=md|html|pdf|docx`。`md`/`html` 直接返回文本；`pdf`/`docx` 以附件下载（`Content-Disposition: attachment`，文件名 `exam-diagnosis-report-<run_id 前 8 位>.pdf/.docx`）。
+- PDF 和 Word 从同一份中间结构（`export.report_blocks`：标题 / 段落 / 列表 / 编号列表）渲染，章节和内容与 Markdown 版一致，包括"未通过复核的验证题答案不展示"这条规则——导出文件里同样只出现占位说明，不会带出未审核的答案。
+- PDF 用已有依赖 PyMuPDF 的 Story 排版引擎生成（自带中文回退字体，A4 自动分页），不需要再装 weasyprint/reportlab 这类工具；装了 `fonttools` 时会做字体子集化，否则每份 PDF 会内嵌整套约 3.5MB 的中文字体（内容仍然正确，只是文件大）。Word 用 `python-docx`，标题/列表用 Word 内置样式，中文字体指定为宋体。
+
 ## 模型调用可观测性与成本控制
 
 - `GET /api/model-calls`（可选 `role`、`limit` 查询参数）返回当前用户触发过的模型调用记录：角色、模型、延迟、成功与否、失败原因、token 用量，以及汇总统计（总数/成功/失败/平均延迟/总 token）和当前的 `budget` 状态。

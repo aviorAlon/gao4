@@ -9,7 +9,7 @@ import sys
 import threading
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 from pydantic import BaseModel, Field
 from .parser import LocalParser, ModelTextSplitter, OpenAICompatibleVisionParser, PageParseResult, extract_pdf_text, is_scanned_pdf_result, parse_scanned_pdf
 from .knowledge import match_knowledge_points
@@ -1151,11 +1151,18 @@ def export_report(rid: str, format: str = 'md'):
     run = RUNS.get(rid)
     if not run or 'report' not in run:
         return JSONResponse({'error': 'report_not_found'}, status_code=404)
+    from .export import EXPORT_MEDIA_TYPES, render_docx, render_pdf
     from .reporting import render_html, render_markdown
     if format == 'html':
         return HTMLResponse(render_html(run['report']))
     if format == 'md':
         return PlainTextResponse(render_markdown(run['report']), media_type='text/markdown')
+    if format in EXPORT_MEDIA_TYPES:
+        content = render_pdf(run['report']) if format == 'pdf' else render_docx(run['report'])
+        # Binary formats are downloads, not pages: an ASCII-only filename keeps the header valid
+        # everywhere without RFC 5987 encoding games, and the run id makes it findable later.
+        filename = f'exam-diagnosis-report-{rid[:8]}.{format}'
+        return Response(content, media_type=EXPORT_MEDIA_TYPES[format], headers={'Content-Disposition': f'attachment; filename="{filename}"'})
     return JSONResponse({'error': 'unsupported_format'}, status_code=422)
 
 @app.get('/api/model-calls')
