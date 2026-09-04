@@ -12,6 +12,8 @@ import argparse
 import os
 import socket
 import sys
+import threading
+import time
 from typing import IO
 
 
@@ -27,7 +29,45 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument('--port', type=int, default=8765, help='0 = pick a free port (announced on stdout as LISTENING host:port)')
     parser.add_argument('--data-dir', default=None, help='where to keep the database, uploads and config.json (EXAM_DIAGNOSIS_DATA_DIR)')
     parser.add_argument('--log-level', default='info')
+    parser.add_argument('--parent-pid', type=int, default=None, help='exit as soon as this process is gone (the desktop shell passes its own pid)')
     return parser.parse_args(argv)
+
+
+def watch_parent(pid: int, on_exit=None, poll_seconds: float = 1.0) -> threading.Thread:
+    """Exit when the supervising process disappears.
+
+    The shell kills the backend on a clean exit, but a crash, a Task Manager kill or a forced
+    close never runs that code — and an orphaned server would sit on a port with the user's
+    data open until reboot. On Windows the parent's process handle becomes signalled when it
+    exits (no polling); elsewhere the pid is probed with signal 0. Daemon thread, so it never
+    keeps the process alive itself."""
+    exit_now = on_exit or (lambda: os._exit(0))
+
+    def run():
+        if sys.platform == 'win32':
+            import ctypes
+            from ctypes import wintypes
+
+            kernel32 = ctypes.windll.kernel32
+            SYNCHRONIZE = 0x00100000
+            handle = kernel32.OpenProcess(SYNCHRONIZE, False, wintypes.DWORD(pid))
+            if handle:
+                kernel32.WaitForSingleObject(handle, 0xFFFFFFFF)  # INFINITE
+                kernel32.CloseHandle(handle)
+                exit_now()
+                return
+            # No handle (already gone, or not permitted): fall through to polling.
+        while True:
+            try:
+                os.kill(pid, 0)
+            except OSError:
+                exit_now()
+                return
+            time.sleep(poll_seconds)
+
+    thread = threading.Thread(target=run, name='parent-watchdog', daemon=True)
+    thread.start()
+    return thread
 
 
 def build_server(host: str, port: int, log_level: str = 'info', announce: IO[str] | None = None):
@@ -51,6 +91,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     if args.data_dir:
         os.environ['EXAM_DIAGNOSIS_DATA_DIR'] = args.data_dir
+    if args.parent_pid:
+        watch_parent(args.parent_pid)
     port = args.port or pick_free_port(args.host)
     server = build_server(args.host, port, args.log_level)
     server.run()

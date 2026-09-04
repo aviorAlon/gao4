@@ -11,4 +11,8 @@ data/*.db
 data/*.sqlite
 data/*.sqlite3
 data/uploads/
+data/config.json
 *.log
+# PyInstaller work dir and the frozen backend the desktop build ships (scripts/build_backend.py)
+build/
+frontend/src-tauri/resources/

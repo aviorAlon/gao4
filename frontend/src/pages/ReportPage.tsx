@@ -8,7 +8,7 @@ import {
   BulbOutlined, CheckCircleOutlined, ExclamationCircleOutlined,
 } from '@ant-design/icons'
 import {
-  API_BASE, loadReport, listMasteryRecords, listVerificationQuestions, reviewVerificationQuestion,
+  apiUrl, loadReport, listMasteryRecords, listVerificationQuestions, reviewVerificationQuestion,
   submitVerificationAttempt, type AnalysisReport, type MasteryRecord, type ReviewOrderItem,
   type VerificationQuestionEntity, type WrongQuestion,
 } from '../api'
@@ -477,10 +477,10 @@ export default function ReportPage() {
 
           <Divider />
           <Space>
-            <a href={`${API_BASE}/api/reports/${report.analysis_run_id}/export?format=md`}>导出 Markdown</a>
-            <a href={`${API_BASE}/api/reports/${report.analysis_run_id}/export?format=html`}>导出 HTML</a>
-            <a href={`${API_BASE}/api/reports/${report.analysis_run_id}/export?format=pdf`}>导出 PDF</a>
-            <a href={`${API_BASE}/api/reports/${report.analysis_run_id}/export?format=docx`}>导出 Word</a>
+            <a href={apiUrl(`/api/reports/${report.analysis_run_id}/export?format=md`)}>导出 Markdown</a>
+            <a href={apiUrl(`/api/reports/${report.analysis_run_id}/export?format=html`)}>导出 HTML</a>
+            <a href={apiUrl(`/api/reports/${report.analysis_run_id}/export?format=pdf`)}>导出 PDF</a>
+            <a href={apiUrl(`/api/reports/${report.analysis_run_id}/export?format=docx`)}>导出 Word</a>
           </Space>
         </>
       )}

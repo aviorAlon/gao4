@@ -1,6 +1,47 @@
 import axios from 'axios'
 
-export const API_BASE = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8765'
+/** Where the API lives. Three sources, in order: the desktop shell (it spawns the backend on a
+ * free port and tells us via a Tauri command), VITE_API_BASE at build time (the verify setup), or
+ * the web deployment's fixed 127.0.0.1:8765. Mutable because the first source is only known at
+ * runtime — call resolveApiBase() once before rendering. */
+export let API_BASE: string = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8765'
+
+export function apiUrl(path: string) {
+  return `${API_BASE}${path}`
+}
+
+export function isDesktopShell(): boolean {
+  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+}
+
+export async function resolveApiBase(): Promise<string> {
+  if (isDesktopShell()) {
+    // Loaded on demand so the web bundle never ships (or evaluates) the Tauri bridge.
+    const { invoke } = await import('@tauri-apps/api/core')
+    const base = await invoke<string>('api_base')
+    if (base) {
+      API_BASE = base
+      api.defaults.baseURL = base
+    }
+  }
+  return API_BASE
+}
+
+/** Poll /api/health until the backend answers — the desktop shell has already waited for the
+ * process to bind, but the web deployment may be started before its backend. */
+export async function waitForBackend(timeoutMs = 20000, onTick?: (attempt: number) => void): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  for (let attempt = 1; Date.now() < deadline; attempt++) {
+    try {
+      await api.get('/api/health', { timeout: 2000 })
+      return true
+    } catch {
+      onTick?.(attempt)
+      await new Promise((resolve) => setTimeout(resolve, 800))
+    }
+  }
+  return false
+}
 
 export const api = axios.create({
   baseURL: API_BASE,
@@ -438,7 +479,7 @@ export async function importKnowledgeBase(file: File): Promise<KnowledgeBase> {
 }
 
 export function knowledgeBaseExportUrl(id: string) {
-  return `${API_BASE}/api/knowledge-bases/${id}/export`
+  return apiUrl(`/api/knowledge-bases/${id}/export`)
 }
 
 /** Effective points for a scope as the current user sees them (public base + their own). */

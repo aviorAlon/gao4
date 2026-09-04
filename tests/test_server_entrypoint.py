@@ -44,3 +44,20 @@ def test_server_announces_its_address_once_it_is_actually_listening(tmp_path, mo
         instance.should_exit = True
         thread.join(timeout=10)
     assert not thread.is_alive()
+
+
+def test_parent_watchdog_fires_when_the_watched_process_exits():
+    import subprocess
+    import sys as _sys
+
+    parent = subprocess.Popen([_sys.executable, '-c', 'import time; time.sleep(0.6)'])
+    fired = threading.Event()
+    server.watch_parent(parent.pid, on_exit=fired.set, poll_seconds=0.1)
+    assert not fired.is_set()  # parent still alive
+    parent.wait(timeout=10)
+    assert fired.wait(timeout=5), 'watchdog did not notice the parent exiting'
+
+
+def test_parent_pid_argument_is_parsed_and_optional():
+    assert server.parse_args([]).parent_pid is None
+    assert server.parse_args(['--parent-pid', '4242']).parent_pid == 4242

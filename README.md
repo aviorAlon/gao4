@@ -111,8 +111,11 @@ PYTHONPATH=. pytest -q
 
 - `frontend/src-tauri/` 是 Tauri 2 的桌面壳：同一套 React 前端装进原生窗口（Windows 用系统自带的 WebView2），不是另写一份 UI。需要 Rust 工具链（`cargo`）和 `frontend` 目录下的 `npm install`。
 - 开发：`npm --prefix frontend run desktop:dev`（自动起 Vite 再开窗口）；打包：`npm --prefix frontend run desktop:build`，产物在 `frontend/src-tauri/target/release/`（exe 和安装包）。
-- 桌面壳目前**只是前端**：它连的是 `http://127.0.0.1:8765` 的 API 后端，后端仍要按"启动"一节单独跑起来；后端没起时首页会提示"请检查后端服务是否在运行"。把 Python 后端打进安装包（sidecar）是下一步，不在这一版里。
-- 窗口的 CSP 只放行本机后端（127.0.0.1/localhost:8765）、Google Fonts 和内联样式（antd 需要）；改后端端口要同步改 `src-tauri/tauri.conf.json` 里的 `connect-src`。
+- **自带后端**：`python scripts/build_backend.py` 用 PyInstaller 把 API 后端冻结成 `frontend/src-tauri/resources/backend/`（onedir，约 100MB），并自动做一次冒烟测试——用冻结出来的程序真的跑一遍"建任务 → 确认 → 报告 → 导出 PDF/Word"，因为 PyInstaller 漏掉数据文件（python-docx 模板、PyMuPDF 原生库、知识库 YAML）时只会在运行期炸。之后 `desktop:build` 会把这个目录作为资源打进安装包。
+- 运行时：壳启动即拉起 `backend/exam-diagnosis-backend.exe --port 0 --data-dir <用户 AppData> --parent-pid <壳的 pid>`，读它打出的 `LISTENING host:port`，前端通过 Tauri 命令 `api_base` 拿到地址，再轮询 `/api/health` 确认就绪才显示界面；壳正常退出时杀掉后端进程，壳被强杀/崩溃时后端靠 `--parent-pid` 看门狗自己退出（Windows 上等父进程句柄被触发，其它平台轮询 pid），不会留下占着端口的孤儿进程。子进程的环境里会剔除所有 `EXAM_DIAGNOSIS_*_API_KEY`——桌面版的 key 一律来自设置页写的 `config.json`，不会意外继承开发者 shell 里的变量。
+- 没找到内置后端时（`tauri dev` 但还没跑 `build_backend.py`，或开发者自己起后端），壳不拉起任何进程，前端退回默认的 `127.0.0.1:8765`；也可用 `EXAM_DIAGNOSIS_BACKEND_EXE` 指定后端程序路径。
+- 窗口的 CSP 放行本机任意端口（后端端口是动态的）、Google Fonts 和内联样式（antd 需要）。
+- 数据位置：Windows 上是 `%APPDATA%\com.examdiagnosis.desktop\`（数据库、上传文件、`config.json`）。
 
 ## 系统状态
 
