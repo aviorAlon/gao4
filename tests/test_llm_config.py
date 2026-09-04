@@ -39,6 +39,18 @@ def test_unknown_role_rejected():
         client_from_env('translation')
 
 
+def test_no_role_has_a_real_credential_by_default():
+    # Regression guard for a real incident: a genuine .env.local sitting in the repo (created
+    # while working through this project's own DeepSeek setup) got re-read by app.py's module
+    # reload during test_app.py's restart test, silently activating real model calls inside
+    # report-generation tests that expected client_from_env to return None. conftest.py now scrubs
+    # these before the session starts and app.py refuses to load .env.local under pytest at all —
+    # this asserts the guarantee that matters: no role is ever live unless a test explicitly
+    # (via its own monkeypatch.setenv, as the other tests in this file do) turns it on.
+    for role in ('analysis', 'report', 'split', 'verify'):
+        assert client_from_env(role) is None
+
+
 def test_split_role_defaults_to_cheaper_model(monkeypatch):
     monkeypatch.setenv('EXAM_DIAGNOSIS_SPLIT_API_KEY', 'sk-test')
     monkeypatch.delenv('EXAM_DIAGNOSIS_SPLIT_MODEL', raising=False)
