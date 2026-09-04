@@ -129,6 +129,16 @@ PYTHONPATH=. pytest -q
 - 重跑会先清掉这次考试上一轮的页面再重新解析，不会留下重复页面或重复题目。
 - 重跑保留两类用户输入：页面是否计入解析统计的显式判定，以及已经手工修改过的题目草稿（草稿会重新指向新生成的页面）。
 
+## 登录与多用户
+
+- 账号接口：`POST /api/auth/register`（用户名 3-32 位小写字母/数字/`_ . -`，密码至少 8 位）、`POST /api/auth/login`、`POST /api/auth/logout`、`GET /api/auth/me`。注册/登录返回一个 bearer token，后续请求带 `Authorization: Bearer <token>`；token 默认 30 天过期（`EXAM_DIAGNOSIS_SESSION_TTL_HOURS` 可调），退出即作废。
+- 密码用 pbkdf2-sha256（20 万轮、随机盐）存储，数据库里存的是 token 的 sha256 而不是 token 本身；登录连续失败 5 次后同一用户名 15 分钟内拒绝尝试（429）；"用户不存在"和"密码错误"返回同一个 `invalid_credentials`，不给枚举账号的机会。
+- 两种模式，由 `EXAM_DIAGNOSIS_AUTH_REQUIRED` 决定：
+  - 不开（默认）：和以前一样，没带 token 就按 `X-User-Id`（缺省 `local`）算身份，本地单人使用零配置。带了 token 以 token 为准；带了**无效/过期**的 token 直接 401，不会悄悄退回本地身份。
+  - 开启（`=1`）：除注册/登录外的所有接口都必须带有效 token，`X-User-Id` 完全不看——它只是个谁都能填的请求头，一旦有第二个真人就不能再当身份用。
+- 资源归属仍然沿用原来的 `user_id` 字段和 `enforce_resource_owner` 这一个检查点，登录只是换了"当前用户是谁"的来源；别人的资料一律 404。
+- 前端：`/login` 页面（登录/注册切换），token 存在 localStorage，请求自动带上；任何接口返回 401 就清掉 token 跳去登录页。页面右上角显示当前身份（"本地用户（未登录）"或账号显示名）和登录/退出。
+
 ## 用户归属与资源隔离
 
 - MVP 按本地单用户运行，但领域模型保留了归属边界：任务、考试、资产、上传会话、任务作业、页面、题目记录、分析运行、验证题、掌握记录都带 `user_id`。

@@ -1,10 +1,36 @@
-import { ConfigProvider } from 'antd'
+import { useEffect, useState } from 'react'
+import { Button, ConfigProvider, Typography } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Link, useLocation } from 'react-router-dom'
 import HomePage from './pages/HomePage'
 import SubmissionPage from './pages/SubmissionPage'
 import ExamPage from './pages/ExamPage'
 import ReportPage from './pages/ReportPage'
+import LoginPage from './pages/LoginPage'
+import { fetchMe, getToken, logout, type MeResponse } from './api'
+
+/** Who the backend thinks we are, in the page's top-right corner. In the default local setup this
+ * says "本地用户" and offers a login link; with a session it names the account and offers logout. */
+function AuthBar() {
+  const location = useLocation()
+  const token = getToken()
+  const [me, setMe] = useState<MeResponse | null>(null)
+
+  useEffect(() => {
+    if (location.pathname === '/login') return
+    fetchMe().then(setMe).catch(() => setMe(null))
+  }, [location.pathname, token])
+
+  if (location.pathname === '/login' || !me) return null
+  return (
+    <div style={{ position: 'absolute', top: 12, right: 20, display: 'flex', gap: 12, alignItems: 'center' }}>
+      <Typography.Text type="secondary">{me.anonymous ? '本地用户（未登录）' : me.user.display_name}</Typography.Text>
+      {me.anonymous
+        ? <Link to="/login">登录</Link>
+        : <Button size="small" onClick={() => logout().then(() => window.location.assign('/'))}>退出</Button>}
+    </div>
+  )
+}
 
 const theme = {
   token: {
@@ -49,7 +75,9 @@ export default function App() {
   return (
     <ConfigProvider locale={zhCN} theme={theme}>
       <BrowserRouter>
+        <AuthBar />
         <Routes>
+          <Route path="/login" element={<LoginPage />} />
           <Route path="/" element={<HomePage />} />
           <Route path="/submissions/:id" element={<SubmissionPage />} />
           <Route path="/exams/:id" element={<ExamPage />} />

@@ -4,8 +4,73 @@ export const API_BASE = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8765'
 
 export const api = axios.create({
   baseURL: API_BASE,
+  // Identity when nobody is logged in and the backend runs with auth optional (the default local
+  // single-user setup). Ignored by the backend whenever a bearer token is sent or auth is required.
   headers: { 'X-User-Id': 'local' },
 })
+
+// --- Session token ---
+
+export const TOKEN_KEY = 'exam_diagnosis_token'
+
+export function getToken(): string | null {
+  try { return localStorage.getItem(TOKEN_KEY) } catch { return null }
+}
+
+export function setToken(token: string | null) {
+  try {
+    if (token) localStorage.setItem(TOKEN_KEY, token)
+    else localStorage.removeItem(TOKEN_KEY)
+  } catch { /* storage unavailable (private mode) — session lasts for this page load only */ }
+}
+
+api.interceptors.request.use((config) => {
+  const token = getToken()
+  if (token) config.headers.Authorization = `Bearer ${token}`
+  return config
+})
+
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const status = error?.response?.status
+    const url: string = error?.config?.url ?? ''
+    // A 401 anywhere except the login/register calls themselves means our session is gone (or
+    // the backend requires one we don't have): drop the stale token and go sign in.
+    if (status === 401 && !url.startsWith('/api/auth/login') && !url.startsWith('/api/auth/register')) {
+      setToken(null)
+      if (window.location.pathname !== '/login') {
+        window.location.assign(`/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`)
+      }
+    }
+    return Promise.reject(error)
+  },
+)
+
+export interface AuthUser { id: string; username: string; display_name: string; created_at: string | null }
+export interface SessionResponse { user: AuthUser; token: string; expires_at: string }
+export interface MeResponse { user: AuthUser; anonymous: boolean; auth_required: boolean }
+
+export async function register(username: string, password: string, displayName?: string): Promise<SessionResponse> {
+  const { data } = await api.post<SessionResponse>('/api/auth/register', { username, password, display_name: displayName ?? '' })
+  setToken(data.token)
+  return data
+}
+
+export async function login(username: string, password: string): Promise<SessionResponse> {
+  const { data } = await api.post<SessionResponse>('/api/auth/login', { username, password })
+  setToken(data.token)
+  return data
+}
+
+export async function logout(): Promise<void> {
+  try { await api.post('/api/auth/logout') } finally { setToken(null) }
+}
+
+export async function fetchMe(): Promise<MeResponse> {
+  const { data } = await api.get<MeResponse>('/api/auth/me')
+  return data
+}
 
 // --- Report types, matching the shape returned by GET /api/analysis-runs/{id}/report ---
 // Kept as a hand-written mirror of the backend's dict shape (exam_diagnosis/app.py,

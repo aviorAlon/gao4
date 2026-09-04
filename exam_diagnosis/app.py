@@ -16,6 +16,7 @@ from .knowledge import match_knowledge_points
 from .diagnosis import diagnose_records, model_grade_attempt
 from .storage import SQLiteMapping
 from .tasks import TaskQueue
+from . import auth
 from .knowledge import KnowledgePartitionNotFound, available_partitions, find_partition
 from .review import APPROVED, NEEDS_REVIEW, review_report, withhold_unreviewed_answer
 from .llm import client_from_env
@@ -40,9 +41,41 @@ if 'pytest' not in sys.modules:
 LOCAL_USER_ID = 'local'
 USER_HEADER = 'X-User-Id'
 
-def current_user_id(request: Request) -> str:
-    """MVP runs as a single local user, but every resource still carries its owner."""
+# Two identity modes, chosen by EXAM_DIAGNOSIS_AUTH_REQUIRED:
+#   off (default) — the original single-user MVP behaviour: X-User-Id or 'local'. A bearer token,
+#     if one is presented, still wins, and a *bad* token is a 401 rather than a silent fallback.
+#   on — every request outside PUBLIC_PATHS must carry a valid bearer token; X-User-Id is ignored
+#     entirely (it's a plain header anyone can set, so it can't be an identity once there's more
+#     than one real person).
+AUTH_REQUIRED = os.getenv('EXAM_DIAGNOSIS_AUTH_REQUIRED', '').strip().lower() in ('1', 'true', 'yes', 'on')
+SESSION_TTL_HOURS = float(os.getenv('EXAM_DIAGNOSIS_SESSION_TTL_HOURS') or 24 * 30)
+PUBLIC_PATHS = frozenset({'/api/auth/register', '/api/auth/login'})
+LOGIN_THROTTLE = auth.LoginThrottle()
+
+
+def _session_for_token(token: str) -> dict | None:
+    session = AUTH_SESSIONS.get(auth.token_key(token))
+    if not session or session.get('revoked') or auth.is_expired(session):
+        return None
+    return session
+
+
+def resolve_user_id(request: Request) -> str:
+    header = request.headers.get('Authorization')
+    if header:
+        token = auth.bearer_token(header)
+        session = _session_for_token(token) if token else None
+        if session is None:
+            raise HTTPException(status_code=401, detail={'error': 'invalid_token'})
+        return session['user_id']
+    if AUTH_REQUIRED:
+        raise HTTPException(status_code=401, detail={'error': 'authentication_required'})
     return request.headers.get(USER_HEADER) or LOCAL_USER_ID
+
+
+def current_user_id(request: Request) -> str:
+    """Every resource carries its owner; this is where a request's owner comes from."""
+    return resolve_user_id(request)
 
 SUBMISSIONS = SQLiteMapping('submissions')
 EXAMS = SQLiteMapping('exams')
@@ -56,8 +89,10 @@ VERIFICATION_QUESTIONS = SQLiteMapping('verification_questions')
 MASTERY_RECORDS = SQLiteMapping('mastery_records')
 MODEL_CALLS = SQLiteMapping('model_calls')
 TASKS = SQLiteMapping('tasks')
+USERS = SQLiteMapping('users')
+AUTH_SESSIONS = SQLiteMapping('auth_sessions')
 
-_PERSISTENT_MAPPINGS = (SUBMISSIONS, EXAMS, ASSETS, RUNS, UPLOAD_SESSIONS, JOBS, PAGES, QUESTION_RECORDS, VERIFICATION_QUESTIONS, MASTERY_RECORDS, MODEL_CALLS, TASKS)
+_PERSISTENT_MAPPINGS = (SUBMISSIONS, EXAMS, ASSETS, RUNS, UPLOAD_SESSIONS, JOBS, PAGES, QUESTION_RECORDS, VERIFICATION_QUESTIONS, MASTERY_RECORDS, MODEL_CALLS, TASKS, USERS, AUTH_SESSIONS)
 
 
 def _flush_all_state() -> None:
@@ -178,8 +213,12 @@ OWNED_BY_PATH_PARAM = {
     'record_id': QUESTION_RECORDS, 'question_id': VERIFICATION_QUESTIONS, 'task_id': TASKS,
 }
 
-def enforce_resource_owner(request: Request, user_id: str = Depends(current_user_id)):
-    """One chokepoint for the isolation boundary, so no route can forget to check it."""
+def enforce_resource_owner(request: Request):
+    """One chokepoint for the isolation boundary, so no route can forget to check it. Also where
+    authentication is enforced: register/login are the only routes reachable without one."""
+    if request.url.path in PUBLIC_PATHS:
+        return
+    user_id = resolve_user_id(request)
     for name, value in request.path_params.items():
         entity = OWNED_BY_PATH_PARAM.get(name, {}).get(value) if name in OWNED_BY_PATH_PARAM else None
         if entity and entity.get('user_id', LOCAL_USER_ID) != user_id:
@@ -1351,3 +1390,89 @@ def recover_orphaned_tasks() -> list[dict]:
 
 
 recover_orphaned_tasks()
+
+
+# --- Accounts -----------------------------------------------------------------------------------
+
+
+class RegisterIn(BaseModel):
+    username: str
+    password: str
+    display_name: str = ''
+
+
+class LoginIn(BaseModel):
+    username: str
+    password: str
+
+
+def public_user(user: dict) -> dict:
+    return {'id': user['id'], 'username': user['username'], 'display_name': user.get('display_name') or user['username'], 'created_at': user.get('created_at')}
+
+
+def _find_user(username: str) -> dict | None:
+    return next((item for item in USERS.values() if item.get('username') == username), None)
+
+
+def _open_session(user_id: str) -> tuple[str, dict]:
+    token = auth.new_token()
+    session = {'id': auth.token_key(token), 'user_id': user_id, 'created_at': datetime.utcnow().isoformat() + 'Z', 'expires_at': auth.expiry(SESSION_TTL_HOURS), 'revoked': False}
+    AUTH_SESSIONS[session['id']] = session
+    return token, session
+
+
+def _session_response(user: dict, token: str, session: dict, status_code: int = 200):
+    return JSONResponse({'user': public_user(user), 'token': token, 'expires_at': session['expires_at']}, status_code=status_code)
+
+
+@app.post('/api/auth/register', status_code=201)
+def register(body: RegisterIn):
+    username = auth.normalize_username(body.username)
+    problem = auth.validate_credentials(username, body.password)
+    if problem:
+        return JSONResponse({'error': problem}, status_code=422)
+    if _find_user(username) is not None:
+        return JSONResponse({'error': 'username_taken'}, status_code=409)
+    user_id = str(uuid4())
+    USERS[user_id] = {
+        'id': user_id, 'username': username, 'display_name': body.display_name.strip() or username,
+        'password_hash': auth.hash_password(body.password), 'created_at': datetime.utcnow().isoformat() + 'Z',
+    }
+    token, session = _open_session(user_id)
+    return _session_response(USERS[user_id], token, session, status_code=201)
+
+
+@app.post('/api/auth/login')
+def login(body: LoginIn):
+    username = auth.normalize_username(body.username)
+    if LOGIN_THROTTLE.blocked(username):
+        return JSONResponse({'error': 'too_many_attempts'}, status_code=429)
+    user = _find_user(username)
+    # One error for both "no such user" and "wrong password" — the split is exactly what an
+    # enumeration attempt is fishing for.
+    if user is None or not auth.verify_password(body.password, user.get('password_hash', '')):
+        LOGIN_THROTTLE.record_failure(username)
+        return JSONResponse({'error': 'invalid_credentials'}, status_code=401)
+    LOGIN_THROTTLE.clear(username)
+    token, session = _open_session(user['id'])
+    return _session_response(user, token, session)
+
+
+@app.post('/api/auth/logout')
+def logout(request: Request):
+    token = auth.bearer_token(request.headers.get('Authorization'))
+    session = AUTH_SESSIONS.get(auth.token_key(token)) if token else None
+    if session is not None:
+        session['revoked'] = True
+        AUTH_SESSIONS[session['id']] = session
+    return {'ok': True}
+
+
+@app.get('/api/auth/me')
+def me(user_id: str = Depends(current_user_id)):
+    user = USERS.get(user_id)
+    if user is not None:
+        return {'user': public_user(user), 'anonymous': False, 'auth_required': AUTH_REQUIRED}
+    # Auth is optional and no token was sent: the caller is the header-named (or default local)
+    # pseudo-user, which is a real identity for data ownership even though nobody logged in.
+    return {'user': {'id': user_id, 'username': user_id, 'display_name': '本地用户' if user_id == LOCAL_USER_ID else user_id, 'created_at': None}, 'anonymous': True, 'auth_required': AUTH_REQUIRED}
