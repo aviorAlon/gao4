@@ -8,7 +8,7 @@ import {
   BulbOutlined, CheckCircleOutlined, ExclamationCircleOutlined,
 } from '@ant-design/icons'
 import {
-  API_BASE, fetchReport, listMasteryRecords, listVerificationQuestions, reviewVerificationQuestion,
+  API_BASE, loadReport, listMasteryRecords, listVerificationQuestions, reviewVerificationQuestion,
   submitVerificationAttempt, type AnalysisReport, type MasteryRecord, type ReviewOrderItem,
   type VerificationQuestionEntity, type WrongQuestion,
 } from '../api'
@@ -398,6 +398,7 @@ export default function ReportPage() {
   const [verificationQuestions, setVerificationQuestions] = useState<VerificationQuestionEntity[]>([])
   const [mastery, setMastery] = useState<MasteryRecord[]>([])
   const [loading, setLoading] = useState(false)
+  const [waitingHint, setWaitingHint] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   async function reloadVerification() {
@@ -416,11 +417,11 @@ export default function ReportPage() {
     if (!runId) return
     setLoading(true)
     setError(null)
-    fetchReport(runId)
-      .then(setReport)
+    setWaitingHint(null)
+    loadReport(runId, () => setWaitingHint('报告生成中：错因诊断和验证题由模型逐题推理，通常需要几十秒，请稍候…'))
+      .then((r) => { setReport(r); return reloadVerification() })
       .catch((e) => setError(e?.response?.data?.error ?? e.message ?? '加载失败'))
-      .finally(() => setLoading(false))
-    reloadVerification()
+      .finally(() => { setLoading(false); setWaitingHint(null) })
   }, [runId])
 
   const examLabel = report?.exam_versions?.map((e) => `${e.name} v${e.version}`).join('；') || '未命名考试'
@@ -439,7 +440,7 @@ export default function ReportPage() {
         />
       </Space.Compact>
 
-      {loading && <Spin />}
+      {loading && <Spin tip={waitingHint ?? undefined}>{waitingHint && <div style={{ minHeight: 80 }} />}</Spin>}
       {error && <Result status="error" title="加载失败" subTitle={error} />}
 
       {!loading && !error && report && (

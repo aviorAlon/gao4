@@ -15,6 +15,7 @@ from .parser import LocalParser, ModelTextSplitter, OpenAICompatibleVisionParser
 from .knowledge import match_knowledge_points
 from .diagnosis import diagnose_records, model_grade_attempt
 from .storage import SQLiteMapping
+from .tasks import TaskQueue
 from .knowledge import KnowledgePartitionNotFound, available_partitions, find_partition
 from .review import APPROVED, NEEDS_REVIEW, review_report, withhold_unreviewed_answer
 from .llm import client_from_env
@@ -54,8 +55,21 @@ QUESTION_RECORDS = SQLiteMapping('question_records')
 VERIFICATION_QUESTIONS = SQLiteMapping('verification_questions')
 MASTERY_RECORDS = SQLiteMapping('mastery_records')
 MODEL_CALLS = SQLiteMapping('model_calls')
+TASKS = SQLiteMapping('tasks')
 
-_PERSISTENT_MAPPINGS = (SUBMISSIONS, EXAMS, ASSETS, RUNS, UPLOAD_SESSIONS, JOBS, PAGES, QUESTION_RECORDS, VERIFICATION_QUESTIONS, MASTERY_RECORDS, MODEL_CALLS)
+_PERSISTENT_MAPPINGS = (SUBMISSIONS, EXAMS, ASSETS, RUNS, UPLOAD_SESSIONS, JOBS, PAGES, QUESTION_RECORDS, VERIFICATION_QUESTIONS, MASTERY_RECORDS, MODEL_CALLS, TASKS)
+
+
+def _flush_all_state() -> None:
+    for mapping in _PERSISTENT_MAPPINGS:
+        mapping.flush()
+
+
+# Background execution for the two slow operations (exam parsing, report generation). One worker
+# by default: the work is dominated by model calls, and running several tasks at once mostly
+# means racing the shared token budget; raise EXAM_DIAGNOSIS_TASK_WORKERS if that's wanted.
+TASK_WORKERS = int(os.getenv('EXAM_DIAGNOSIS_TASK_WORKERS') or 1)
+TASK_QUEUE = TaskQueue(TASKS, workers=TASK_WORKERS, after_task=_flush_all_state)
 
 MODEL_CALLS_MAX = 500
 
@@ -161,7 +175,7 @@ def vision_parser_for(user_id: str | None, **context: Any) -> OpenAICompatibleVi
 OWNED_BY_PATH_PARAM = {
     'sid': SUBMISSIONS, 'eid': EXAMS, 'asset_id': ASSETS, 'rid': RUNS,
     'session_id': UPLOAD_SESSIONS, 'job_id': JOBS, 'page_id': PAGES,
-    'record_id': QUESTION_RECORDS, 'question_id': VERIFICATION_QUESTIONS,
+    'record_id': QUESTION_RECORDS, 'question_id': VERIFICATION_QUESTIONS, 'task_id': TASKS,
 }
 
 def enforce_resource_owner(request: Request, user_id: str = Depends(current_user_id)):
@@ -219,8 +233,7 @@ def safe_remove_asset_file(asset: dict):
 @app.middleware('http')
 async def persist_state_after_request(request: Request, call_next):
     response = await call_next(request)
-    for mapping in _PERSISTENT_MAPPINGS:
-        mapping.flush()
+    _flush_all_state()
     return response
 
 class SubmissionIn(BaseModel):
@@ -523,11 +536,48 @@ def retry_job(job_id: str):
 
 @app.post('/api/jobs/{job_id}/run')
 def run_job(job_id: str):
+    """Synchronous variant: parses in the request thread and returns the finished job. Kept for
+    scripts and tests; interactive clients should POST /enqueue and poll instead."""
     job = JOBS.get(job_id)
     if not job:
         return JSONResponse({'error': 'job_not_found'}, status_code=404)
+    active = TASK_QUEUE.active_for(job_id=job_id)
+    if active is not None:
+        return JSONResponse({'error': 'job_already_enqueued', 'task_id': active['id']}, status_code=409)
     if job['status'] != 'queued':
         return JSONResponse({'error': 'job_not_queued'}, status_code=409)
+    return job if _execute_parse_job(job_id) else JSONResponse(job, status_code=500)
+
+
+@app.post('/api/jobs/{job_id}/enqueue', status_code=202)
+def enqueue_job(job_id: str):
+    """Queue the parse on a worker thread and return at once with a task id to poll
+    (GET /api/tasks/{task_id}, or GET /api/jobs/{job_id} for per-stage progress)."""
+    job = JOBS.get(job_id)
+    if not job:
+        return JSONResponse({'error': 'job_not_found'}, status_code=404)
+    active = TASK_QUEUE.active_for(job_id=job_id)
+    if active is not None:
+        return JSONResponse({'error': 'job_already_enqueued', 'task_id': active['id']}, status_code=409)
+    if job['status'] != 'queued':
+        return JSONResponse({'error': 'job_not_queued'}, status_code=409)
+    task = TASK_QUEUE.submit('parse_exam', lambda: _run_parse_job_task(job_id), user_id=job.get('user_id', LOCAL_USER_ID), job_id=job_id, exam_id=job['exam_id'])
+    job['task_id'] = task['id']
+    JOBS[job_id] = job
+    return {'job': job, 'task_id': task['id']}
+
+
+def _run_parse_job_task(job_id: str) -> dict:
+    if _execute_parse_job(job_id):
+        return {'job_id': job_id, 'status': 'completed'}
+    job = JOBS[job_id]
+    raise RuntimeError(f"{job.get('failed_stage')}: {job.get('error')}")
+
+
+def _execute_parse_job(job_id: str) -> bool:
+    """Run every queued stage of a parse job in place. True on success; on failure the job and
+    the failing stage carry the error (the shape /retry expects) and this returns False."""
+    job = JOBS[job_id]
     exam = EXAMS[job['exam_id']]
     current_stage = None
     try:
@@ -595,14 +645,14 @@ def run_job(job_id: str):
       job['status'] = 'completed'
       exam = EXAMS[job['exam_id']]
       exam['status'] = 'waiting_confirmation'
-      return job
+      return True
     except Exception as exc:
       current_stage['status'] = 'failed'
       current_stage['error'] = str(exc)
       job['status'] = 'failed'
       job['failed_stage'] = current_stage['name']
       job['error'] = str(exc)
-      return JSONResponse(job, status_code=500)
+      return False
 
 def classify_filename(filename: str) -> str:
     lowered = Path(filename).name.lower()
@@ -969,37 +1019,95 @@ def build_quality_flags(exam_ids: list[str], records: list[dict], unmapped: list
         flags.append({'code': 'missing_scores', 'severity': 'info', 'detail': without_score, 'message': f'有 {len(without_score)} 道题没有录入得分，失分分析不完整'})
     return flags
 
-@app.get('/api/analysis-runs/{rid}/report')
-def get_analysis_report(rid: str):
+class ReportGenerationError(Exception):
+    """A report couldn't be generated for a reason the client has to fix (missing knowledge
+    partition, exam re-parsed since the run was created). Carries the HTTP shape so the
+    synchronous route can answer with it directly and the background task can record it."""
+
+    def __init__(self, status_code: int, payload: dict):
+        super().__init__(payload.get('error', 'report_generation_failed'))
+        self.status_code = status_code
+        self.payload = payload
+
+
+def _claim_report_generation(rid: str) -> tuple[dict | None, JSONResponse | None]:
+    """Decide, under the lock, whether this caller gets to generate the report.
+
+    Returns (run, None) when the caller may proceed (or the report already exists — callers
+    check run['report'] first), or (None, response) with the answer to send instead: 404 for an
+    unknown run, 202 'report_generating' while another request or a background task has it,
+    409 for a run that was never confirm-started."""
     run = RUNS.get(rid)
     if not run:
-        return JSONResponse({'error': 'run_not_found'}, status_code=404)
+        return None, JSONResponse({'error': 'run_not_found'}, status_code=404)
     with _REPORT_GENERATION_LOCK:
         if run['status'] == 'report_ready' and run.get('report'):
-            return run['report']
+            return run, None
+        if run['status'] == 'generating':
+            # Someone else is paying for this generation right now; the client should poll, not
+            # start a second one.
+            return None, JSONResponse({'error': 'report_generating', 'status': 'generating', 'run_id': rid, 'task_id': run.get('task_id')}, status_code=202)
         if run['status'] != 'queued':
-            # Covers both a run that was never confirm-started (still awaiting_confirmation) and
-            # one another concurrent request has already claimed (status == 'generating') — either
-            # way, this request must not start a second, independently-paid generation.
-            return JSONResponse({'error': 'analysis_not_started'}, status_code=409)
+            return None, JSONResponse({'error': 'analysis_not_started'}, status_code=409)
         run['status'] = 'generating'
         RUNS[rid] = run
+    return run, None
+
+
+def _generate_report_for_run(rid: str, run: dict) -> dict:
+    """The generation itself, for a run already claimed by _claim_report_generation."""
     try:
         submission = SUBMISSIONS[run['submission_id']]
         partition = find_partition(submission['stage'], submission['subject'], submission['province'], submission.get('curriculum_year'))
         if partition is None:
-            return JSONResponse({'error': 'knowledge_partition_not_found', 'requested': {'stage': submission['stage'], 'subject': submission['subject'], 'province': submission['province']}, 'available_partitions': available_partitions()}, status_code=422)
+            raise ReportGenerationError(422, {'error': 'knowledge_partition_not_found', 'requested': {'stage': submission['stage'], 'subject': submission['subject'], 'province': submission['province']}, 'available_partitions': available_partitions()})
         selected = run.get('exam_versions') or exam_versions(run['exam_ids'])
         current = exam_versions(run['exam_ids'])
         if current != selected:
-            return JSONResponse({'error': 'exam_versions_changed', 'selected': selected, 'current': current}, status_code=409)
+            raise ReportGenerationError(409, {'error': 'exam_versions_changed', 'selected': selected, 'current': current})
         return _generate_report(rid, run, submission, partition, selected)
     finally:
-        # Any early return or exception above leaves run['status'] at 'generating' — revert to
-        # 'queued' so the next GET can retry instead of the run being permanently stuck unclaimed.
+        # Any exception above leaves run['status'] at 'generating' — revert to 'queued' so the
+        # next attempt can retry instead of the run being permanently stuck unclaimed.
         if run['status'] == 'generating':
             run['status'] = 'queued'
             RUNS[rid] = run
+
+
+@app.get('/api/analysis-runs/{rid}/report')
+def get_analysis_report(rid: str):
+    run, error = _claim_report_generation(rid)
+    if error is not None:
+        return error
+    if run['status'] == 'report_ready' and run.get('report'):
+        return run['report']
+    try:
+        return _generate_report_for_run(rid, run)
+    except ReportGenerationError as exc:
+        return JSONResponse(exc.payload, status_code=exc.status_code)
+
+
+@app.post('/api/analysis-runs/{rid}/generate', status_code=202)
+def generate_report_in_background(rid: str):
+    """Start report generation on a worker thread. Poll GET /api/tasks/{task_id} (or just GET the
+    report, which answers 202 until it's ready). Answers 200 if the report already exists."""
+    run, error = _claim_report_generation(rid)
+    if error is not None:
+        return error
+    if run['status'] == 'report_ready' and run.get('report'):
+        return JSONResponse({'run_id': rid, 'status': 'report_ready', 'task_id': run.get('task_id')}, status_code=200)
+    task = TASK_QUEUE.submit('generate_report', lambda: _generate_report_task(rid), user_id=run.get('user_id', LOCAL_USER_ID), run_id=rid)
+    run['task_id'] = task['id']
+    RUNS[rid] = run
+    return {'run_id': rid, 'task_id': task['id'], 'status': 'generating'}
+
+
+def _generate_report_task(rid: str) -> dict:
+    try:
+        _generate_report_for_run(rid, RUNS[rid])
+    except ReportGenerationError as exc:
+        raise RuntimeError(exc.payload.get('error', 'report_generation_failed')) from exc
+    return {'run_id': rid, 'status': 'report_ready'}
 
 
 def _generate_report(rid: str, run: dict, submission: dict, partition, selected: list[dict]) -> dict:
@@ -1197,3 +1305,49 @@ def list_model_calls(user_id: str = Depends(current_user_id), role: str | None =
             'calls_in_last_minute': calls_last_minute,
         },
     }
+
+
+@app.get('/api/tasks')
+def list_tasks(user_id: str = Depends(current_user_id), status: str | None = None, limit: int = 50):
+    tasks = [item for item in TASKS.values() if item.get('user_id', LOCAL_USER_ID) == user_id and (not status or item.get('status') == status)]
+    tasks.sort(key=lambda item: item['created_at'], reverse=True)
+    return {'tasks': tasks[:limit], 'workers': TASK_QUEUE.workers}
+
+
+@app.get('/api/tasks/{task_id}')
+def get_task(task_id: str):
+    task = TASKS.get(task_id)
+    if not task:
+        return JSONResponse({'error': 'task_not_found'}, status_code=404)
+    return task
+
+
+def recover_orphaned_tasks() -> list[dict]:
+    """Startup reconciliation: a task that was queued/running when the process last exited never
+    finished, and the job or run it was working on is still marked as if it had. Mark the task
+    failed (`process_restarted`) and put the job/run back into a state the client can act on —
+    a running job becomes a failed one so /retry works, a generating run goes back to queued."""
+    recovered = TASK_QUEUE.recover_orphaned()
+    for task in recovered:
+        if task.get('kind') == 'parse_exam':
+            job = JOBS.get(task.get('job_id') or '')
+            if job and job.get('status') == 'running':
+                stage = next((item for item in job['stages'] if item['status'] == 'running'), None) or next((item for item in job['stages'] if item['status'] != 'completed'), None)
+                if stage is not None:
+                    stage['status'] = 'failed'
+                    stage['error'] = 'process_restarted'
+                    job['failed_stage'] = stage['name']
+                job['status'] = 'failed'
+                job['error'] = 'process_restarted'
+                JOBS[job['id']] = job
+        elif task.get('kind') == 'generate_report':
+            run = RUNS.get(task.get('run_id') or '')
+            if run and run.get('status') == 'generating':
+                run['status'] = 'queued'
+                RUNS[run['id']] = run
+    if recovered:
+        _flush_all_state()
+    return recovered
+
+
+recover_orphaned_tasks()

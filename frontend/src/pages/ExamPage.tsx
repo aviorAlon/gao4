@@ -9,9 +9,9 @@ import { InboxOutlined, CheckCircleOutlined, UndoOutlined, LinkOutlined, PlusOut
 import {
   confirmExam, createAnalysisRun, createUploadSession, confirmStartRun, finishUploadSession,
   getExam, getParseDraft, linkOriginalSource, listExamAssets, listPages, listQuestionRecords,
-  reopenExam, replaceParseDraft, retryJob, runJob, updatePage, updateParseQuestion, updateQuestionRecord,
+  reopenExam, replaceParseDraft, retryJob, runJobInBackground, updatePage, updateParseQuestion, updateQuestionRecord,
   uploadSessionAsset,
-  type Asset, type DraftQuestion, type Exam, type ExamPage as ExamPageData, type QuestionInput, type QuestionRecord,
+  type Asset, type DraftQuestion, type Exam, type ExamPage as ExamPageData, type Job, type QuestionInput, type QuestionRecord,
 } from '../api'
 import { Masthead, RedPenMark, SectionBlock } from '../chart/Chart'
 import '../chart/chart.css'
@@ -36,15 +36,29 @@ const STEPS = [
   { title: '资料采集' }, { title: '化验解析' }, { title: '诊断确认' }, { title: '处方与分析' },
 ]
 
+// Parse-job stages as the backend names them, in the words the progress line shows.
+const STAGE_LABELS: Record<string, string> = {
+  classify: '识别资料类型', ocr: '读取页面内容', question_split: '切分题目',
+}
+
 function UploadStep({ examId, onDone }: { examId: string; onDone: () => void }) {
   const [fileList, setFileList] = useState<UploadFile[]>([])
   const [busy, setBusy] = useState(false)
   const [jobId, setJobId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [progress, setProgress] = useState<string | null>(null)
+
+  function describeProgress(job: Job) {
+    const running = job.stages.find((s) => s.status === 'running')
+    const done = job.stages.filter((s) => s.status === 'completed').length
+    const label = running ? STAGE_LABELS[running.name] ?? running.name : '排队中'
+    return `${label}（${done}/${job.stages.length} 步完成）`
+  }
 
   async function upload() {
     setBusy(true)
     setError(null)
+    setProgress('上传中…')
     try {
       const session = await createUploadSession(examId)
       for (const f of fileList) {
@@ -53,13 +67,14 @@ function UploadStep({ examId, onDone }: { examId: string; onDone: () => void }) 
       const finished = await finishUploadSession(session.id)
       if (!finished.job_id) throw new Error('未返回解析任务')
       setJobId(finished.job_id)
-      await runJob(finished.job_id)
+      await runJobInBackground(finished.job_id, (job) => setProgress(describeProgress(job)))
       message.success('解析完成')
       onDone()
     } catch (e: any) {
       setError(e?.response?.data?.error ?? e.message ?? '上传或解析失败')
     } finally {
       setBusy(false)
+      setProgress(null)
     }
   }
 
@@ -69,13 +84,14 @@ function UploadStep({ examId, onDone }: { examId: string; onDone: () => void }) 
     setError(null)
     try {
       await retryJob(jobId)
-      await runJob(jobId)
+      await runJobInBackground(jobId, (job) => setProgress(describeProgress(job)))
       message.success('解析完成')
       onDone()
     } catch (e: any) {
       setError(e?.response?.data?.error ?? e.message ?? '重试仍然失败')
     } finally {
       setBusy(false)
+      setProgress(null)
     }
   }
 
@@ -103,6 +119,7 @@ function UploadStep({ examId, onDone }: { examId: string; onDone: () => void }) 
           <Button type="primary" onClick={upload} loading={busy} disabled={!fileList.length}>
             上传全部并运行解析
           </Button>
+          {progress && <Text type="secondary">{progress}</Text>}
         </Flex>
       </Card>
     </SectionBlock>

@@ -89,6 +89,15 @@ PYTHONPATH=. pytest -q
 - 五个角色都遵循和视觉解析一致的规则：没配置、请求失败、响应不是合法 JSON 或不满足预期结构时一律判定为不可用，自动退回各自的兜底逻辑，不会伪造成功。`split` 的兜底是内置的正则匹配（覆盖"第N题"/"N题"/"N."/"N、"/"N．"），但正则结果一律标记 `review_required`，需要人工确认切分是否准确、完整——不能因为规则跑完了就当成解析可信；`verify` 的兜底是原来那句固定模板；`grade` 的兜底是学生自评的分数。
 - 这些 `API_KEY` 不想每次开新终端都用 `$env:...` 重设的话，可以复制 [`.env.local.example`](.env.local.example) 为同目录下的 `.env.local`，把占位符换成真实 key。`.env.local` 已经在 `.gitignore` 的 `.env.*` 规则里，不会被提交；启动时会自动加载，真实的环境变量（如果两边都设了）优先于文件里的值。
 
+## 后台任务队列
+
+- 解析考试（逐页视觉调用）和生成报告（多次模型调用，推理档模型动辄几十秒）不再占着 HTTP 请求跑：`POST /api/jobs/{job_id}/enqueue` 和 `POST /api/analysis-runs/{run_id}/generate` 都立刻返回 202 和一个 `task_id`，工作在进程内的工作线程上执行。
+- 轮询：`GET /api/tasks/{task_id}`（`queued` / `running` / `completed` / `failed`，失败带 `error`）；解析任务也可以直接 `GET /api/jobs/{job_id}` 看每个阶段的状态；报告直接 `GET /api/analysis-runs/{run_id}/report`，生成中返回 202 `report_generating`，好了返回 200。`GET /api/tasks?status=` 列出当前用户的任务。
+- 同一个任务不会被重复排队：解析任务排队/运行中再 `enqueue` 或同步 `run` 返回 409 `job_already_enqueued`；报告生成中再 `generate` 直接返回同一个 `task_id`；报告已存在时 `generate` 返回 200。
+- 原来的同步接口 `POST /api/jobs/{job_id}/run` 和"直接 GET 报告触发生成"都保留，脚本和测试仍可用；前端已改为后台任务 + 轮询，页面上能看到解析到哪一步。
+- 进程内线程池，不依赖 Redis/Celery——本地单用户应用，多一个守护进程没有收益。默认 1 个工作线程（`EXAM_DIAGNOSIS_TASK_WORKERS` 可调）：工作主要是等模型，多个并行只会互相抢同一份 token 预算。
+- 任务记录和其它数据一样存在 SQLite 里，工作线程完成后自行落盘（请求中间件的落盘对后台线程不生效）。进程重启时，上次还在 `queued`/`running` 的任务会被标成 `failed`（`error: process_restarted`），对应的解析任务标 `failed` 以便 `retry`，生成中的报告 run 退回 `queued`——不会留下永远"运行中"的幽灵任务。
+
 ## 报告导出
 
 - `GET /api/reports/{run_id}/export?format=md|html|pdf|docx`。`md`/`html` 直接返回文本；`pdf`/`docx` 以附件下载（`Content-Disposition: attachment`，文件名 `exam-diagnosis-report-<run_id 前 8 位>.pdf/.docx`）。

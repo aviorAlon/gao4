@@ -133,9 +133,31 @@ export interface AnalysisReport {
   summary?: string
 }
 
-export async function fetchReport(runId: string): Promise<AnalysisReport> {
-  const { data } = await api.get<AnalysisReport>(`/api/analysis-runs/${runId}/report`)
-  return data
+export type ReportFetchResult =
+  | { kind: 'ready'; report: AnalysisReport }
+  | { kind: 'generating'; task_id?: string }
+
+/** GET the report. 202 means a generation is in flight (ours or another request's) — poll. */
+export async function fetchReport(runId: string): Promise<ReportFetchResult> {
+  const res = await api.get(`/api/analysis-runs/${runId}/report`)
+  if (res.status === 202) return { kind: 'generating', task_id: res.data?.task_id }
+  return { kind: 'ready', report: res.data as AnalysisReport }
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+/** Generate on the backend's worker thread and poll until the report exists. Report generation
+ * makes several model calls and can take tens of seconds; holding one GET open that long was
+ * exactly how browser/proxy timeouts turned a finished report into "加载失败". Errors the user
+ * has to act on (run never started, knowledge partition missing, exam re-parsed) still reject. */
+export async function loadReport(runId: string, onWaiting?: () => void): Promise<AnalysisReport> {
+  await api.post(`/api/analysis-runs/${runId}/generate`)
+  for (;;) {
+    const result = await fetchReport(runId)
+    if (result.kind === 'ready') return result.report
+    onWaiting?.()
+    await sleep(2000)
+  }
 }
 
 // --- Knowledge partitions ---
@@ -299,6 +321,47 @@ export async function runJob(jobId: string): Promise<Job> {
 export async function getJob(jobId: string): Promise<Job> {
   const { data } = await api.get<Job>(`/api/jobs/${jobId}`)
   return data
+}
+
+export interface TaskRecord {
+  id: string
+  kind: string
+  status: 'queued' | 'running' | 'completed' | 'failed'
+  error: string | null
+  result: unknown
+  job_id?: string
+  run_id?: string
+  created_at: string
+  started_at: string | null
+  finished_at: string | null
+}
+
+export async function enqueueJob(jobId: string): Promise<{ job: Job; task_id: string }> {
+  const { data } = await api.post(`/api/jobs/${jobId}/enqueue`)
+  return data
+}
+
+export async function getTask(taskId: string): Promise<TaskRecord> {
+  const { data } = await api.get<TaskRecord>(`/api/tasks/${taskId}`)
+  return data
+}
+
+/** Enqueue the parse and poll the job until it settles, reporting per-stage progress on the way.
+ * Rejects with the job's own error (and `.job` attached) when a stage fails, so the retry UI can
+ * keep working exactly as it did with the synchronous /run. */
+export async function runJobInBackground(jobId: string, onProgress?: (job: Job) => void): Promise<Job> {
+  await enqueueJob(jobId)
+  for (;;) {
+    const job = await getJob(jobId)
+    onProgress?.(job)
+    if (job.status === 'completed') return job
+    if (job.status === 'failed') {
+      const err = new Error(job.error || '解析失败') as Error & { job: Job }
+      err.job = job
+      throw err
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000))
+  }
 }
 
 export async function retryJob(jobId: string): Promise<Job> {
