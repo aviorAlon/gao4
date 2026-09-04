@@ -86,10 +86,14 @@ PYTHONPATH=. pytest -q
 - 四个角色都遵循和视觉解析一致的规则：没配置、请求失败、响应不是合法 JSON 或不满足预期结构时一律判定为不可用，自动退回各自的兜底逻辑，不会伪造成功。`split` 的兜底是内置的正则匹配（覆盖"第N题"/"N题"/"N."/"N、"/"N．"），但正则结果一律标记 `review_required`，需要人工确认切分是否准确、完整——不能因为规则跑完了就当成解析可信；`verify` 的兜底是原来那句固定模板。
 - 这些 `API_KEY` 不想每次开新终端都用 `$env:...` 重设的话，可以复制 [`.env.local.example`](.env.local.example) 为同目录下的 `.env.local`，把占位符换成真实 key。`.env.local` 已经在 `.gitignore` 的 `.env.*` 规则里，不会被提交；启动时会自动加载，真实的环境变量（如果两边都设了）优先于文件里的值。
 
-## 模型调用可观测性
+## 模型调用可观测性与成本控制
 
-- `GET /api/model-calls`（可选 `role`、`limit` 查询参数）返回当前用户触发过的模型调用记录：角色、模型、延迟、成功与否、失败原因、token 用量，以及汇总统计（总数/成功/失败/平均延迟/总 token）。
+- `GET /api/model-calls`（可选 `role`、`limit` 查询参数）返回当前用户触发过的模型调用记录：角色、模型、延迟、成功与否、失败原因、token 用量，以及汇总统计（总数/成功/失败/平均延迟/总 token）和当前的 `budget` 状态。
 - 每次调用不管成功失败都会记一笔，日志表有上限（500 条），超出自动清理最旧的——这是调试用的可观测性，不是需要长期保留的审计日志。
+- 两个可选的全局开关（默认都不限制，四个角色共用一份额度，不是分角色各设一个）：
+  - `EXAM_DIAGNOSIS_MODEL_DAILY_TOKEN_BUDGET`：当天（UTC）累计成功调用的 token 总数超过这个数，后续调用直接不发起，直接走各角色的兜底逻辑。
+  - `EXAM_DIAGNOSIS_MODEL_MAX_CALLS_PER_MINUTE`：最近一分钟调用次数达到这个数，同样直接拦下。
+- 被拦下的调用不会真的碰网络，但会记一笔到 `/api/model-calls`，标 `blocked: true` 和具体原因（`daily_token_budget_exceeded` / `rate_limited`），不是悄无声息地就是不触发。
 
 ## 知识库分区
 

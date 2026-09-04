@@ -1,7 +1,8 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
+import os
 import re
 import hashlib
 import sys
@@ -91,6 +92,52 @@ def record_model_call(user_id: str | None = None, **context: Any):
             for item in oldest:
                 del MODEL_CALLS[item['id']]
     return on_call
+
+
+# Cost control on top of the observability above — seeing what a call cost after the fact doesn't
+# stop the next one from happening. Both are opt-in via env vars and off (unlimited) by default,
+# matching every other model-related knob in this app: nothing changes for an operator who hasn't
+# configured it. Global across all four roles and the current user, not per-role — a single
+# combined ceiling is what "don't overspend" actually means for a local single-user MVP; splitting
+# it per role would just mean picking four numbers that have to individually add up right anyway.
+MODEL_DAILY_TOKEN_BUDGET = int(os.getenv('EXAM_DIAGNOSIS_MODEL_DAILY_TOKEN_BUDGET') or 0) or None
+MODEL_MAX_CALLS_PER_MINUTE = int(os.getenv('EXAM_DIAGNOSIS_MODEL_MAX_CALLS_PER_MINUTE') or 0) or None
+
+
+def _budget_block_reason(user_id: str) -> str | None:
+    """None if a real model call may proceed; otherwise the reason it's blocked. Checked before a
+    client is even constructed, so a blocked call never reaches the network and costs nothing."""
+    if not MODEL_DAILY_TOKEN_BUDGET and not MODEL_MAX_CALLS_PER_MINUTE:
+        return None
+    now = datetime.utcnow()
+    calls = [c for c in MODEL_CALLS.values() if c.get('user_id', LOCAL_USER_ID) == user_id]
+    if MODEL_MAX_CALLS_PER_MINUTE:
+        recent = sum(1 for c in calls if now - datetime.fromisoformat(c['created_at'].rstrip('Z')) < timedelta(minutes=1))
+        if recent >= MODEL_MAX_CALLS_PER_MINUTE:
+            return 'rate_limited'
+    if MODEL_DAILY_TOKEN_BUDGET:
+        today = now.date().isoformat()
+        used_today = sum(c.get('total_tokens') or 0 for c in calls if c.get('success') and c['created_at'].startswith(today))
+        if used_today >= MODEL_DAILY_TOKEN_BUDGET:
+            return 'daily_token_budget_exceeded'
+    return None
+
+
+def guarded_client_from_env(role: str, user_id: str | None, **context: Any):
+    """Same contract as llm.client_from_env: a ChatClient, or None if the role isn't usable right
+    now — a budget/rate-limit block is recorded exactly like a failed call (visible in
+    /api/model-calls with a `blocked` field), so it shows up instead of the role just silently
+    going quiet with no trace of why."""
+    uid = user_id or LOCAL_USER_ID
+    reason = _budget_block_reason(uid)
+    if reason is not None:
+        record_model_call(uid, **context)({
+            'role': role, 'model': None, 'base_url': None, 'latency_ms': 0, 'attempts': 0,
+            'success': False, 'error': reason, 'blocked': True,
+            'prompt_tokens': None, 'completion_tokens': None, 'total_tokens': None,
+        })
+        return None
+    return client_from_env(role, on_call=record_model_call(uid, **context))
 
 OWNED_BY_PATH_PARAM = {
     'sid': SUBMISSIONS, 'eid': EXAMS, 'asset_id': ASSETS, 'rid': RUNS,
@@ -490,7 +537,7 @@ def run_job(job_id: str):
                     asset['ocr_warning'] = pdf_result.get('warning', '')
                 elif asset.get('media_type', '').startswith('text/'):
                     content = content.decode('utf-8', errors='replace')
-                split_client = client_from_env('split', on_call=record_model_call(exam.get('user_id'), exam_id=job['exam_id'], asset_id=asset['id']))
+                split_client = guarded_client_from_env('split', exam.get('user_id'), exam_id=job['exam_id'], asset_id=asset['id'])
                 parser = ModelTextSplitter(split_client) if isinstance(content, str) else OpenAICompatibleVisionParser()
                 result = parser.parse_page(asset['filename'], content, asset['page_order'])
                 submission = SUBMISSIONS[exam['submission_id']]
@@ -946,13 +993,13 @@ def _generate_report(rid: str, run: dict, submission: dict, partition, selected:
         'quality_flags': build_quality_flags(run['exam_ids'], records, unmapped),
         'source_question_ids': [record['id'] for record in records],
     }
-    analysis_client = client_from_env('analysis', on_call=record_model_call(run.get('user_id'), run_id=rid))
-    verify_client = client_from_env('verify', on_call=record_model_call(run.get('user_id'), run_id=rid))
+    analysis_client = guarded_client_from_env('analysis', run.get('user_id'), run_id=rid)
+    verify_client = guarded_client_from_env('verify', run.get('user_id'), run_id=rid)
     report.update(diagnose_records(records, client=analysis_client, verify_client=verify_client))
     report['review'] = review_report(report, partition)
     if report['review']['status'] != APPROVED:
         report['quality_flags'].append({'code': 'review_pending', 'severity': 'warning', 'detail': [item['code'] for item in report['review']['findings']], 'message': f"独立审查发现 {len(report['review']['findings'])} 处问题，{report['review']['pending_verification_questions']} 道验证题的参考答案在复核通过前不会展示"})
-    report_client = client_from_env('report', on_call=record_model_call(run.get('user_id'), run_id=rid))
+    report_client = guarded_client_from_env('report', run.get('user_id'), run_id=rid)
     if report_client is not None:
         summary = generate_report_summary(report_client, report)
         if summary:
@@ -1059,23 +1106,33 @@ def export_report(rid: str, format: str = 'md'):
 
 @app.get('/api/model-calls')
 def list_model_calls(user_id: str = Depends(current_user_id), role: str | None = None, limit: int = 100):
-    """Observability for the analysis/report/split model roles: every call this user's actions
-    triggered, success or not, with latency and token usage where the provider reported it. There
-    was previously no way to answer "is the model actually being called, and is it working" short
-    of reading server stdout."""
+    """Observability for the analysis/report/split/verify model roles: every call this user's
+    actions triggered, success or not, with latency and token usage where the provider reported
+    it. There was previously no way to answer "is the model actually being called, and is it
+    working" short of reading server stdout."""
     limit = max(1, min(limit, MODEL_CALLS_MAX))
-    calls = [item for item in MODEL_CALLS.values() if item.get('user_id', LOCAL_USER_ID) == user_id]
-    if role:
-        calls = [item for item in calls if item.get('role') == role]
+    all_calls = [item for item in MODEL_CALLS.values() if item.get('user_id', LOCAL_USER_ID) == user_id]
+    calls = [item for item in all_calls if not role or item.get('role') == role]
     calls.sort(key=lambda item: item['created_at'], reverse=True)
     calls = calls[:limit]
     total = len(calls)
     succeeded = sum(1 for item in calls if item.get('success'))
+    now = datetime.utcnow()
+    today = now.date().isoformat()
+    tokens_used_today = sum(item.get('total_tokens') or 0 for item in all_calls if item.get('success') and item['created_at'].startswith(today))
+    calls_last_minute = sum(1 for item in all_calls if now - datetime.fromisoformat(item['created_at'].rstrip('Z')) < timedelta(minutes=1))
     return {
         'calls': calls,
         'summary': {
             'total': total, 'succeeded': succeeded, 'failed': total - succeeded,
             'avg_latency_ms': round(sum(item.get('latency_ms', 0) for item in calls) / total) if total else 0,
             'total_tokens': sum(item.get('total_tokens') or 0 for item in calls),
+        },
+        'budget': {
+            'daily_token_budget': MODEL_DAILY_TOKEN_BUDGET,
+            'tokens_used_today': tokens_used_today,
+            'daily_tokens_remaining': (MODEL_DAILY_TOKEN_BUDGET - tokens_used_today) if MODEL_DAILY_TOKEN_BUDGET else None,
+            'max_calls_per_minute': MODEL_MAX_CALLS_PER_MINUTE,
+            'calls_in_last_minute': calls_last_minute,
         },
     }
