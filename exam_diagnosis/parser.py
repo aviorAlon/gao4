@@ -26,13 +26,97 @@ QUESTION_NUMBER_RE = re.compile(r"(?<!\d)(?:第[ \t]*)?(\d{1,3})[ \t]*(?:题|[.�
 
 
 def extract_pdf_text(path: str | Path) -> dict[str, Any]:
+    """Pull the PDF's text layer. `page_count` lets callers tell a scanned PDF (pages exist, text
+    layer empty) apart from a genuinely empty document — see is_scanned_pdf_result."""
     try:
         import fitz
         document = fitz.open(str(path))
         text = '\n'.join(page.get_text() for page in document).strip()
-        return {'status': 'completed', 'text': text, 'warning': ''}
+        return {'status': 'completed', 'text': text, 'warning': '', 'page_count': len(document)}
     except Exception as exc:
-        return {'status': 'manual_confirmation_required', 'text': '', 'warning': f'未能提取 PDF 文本，请人工确认：{exc}'}
+        return {'status': 'manual_confirmation_required', 'text': '', 'warning': f'未能提取 PDF 文本，请人工确认：{exc}', 'page_count': 0}
+
+
+def is_scanned_pdf_result(pdf_result: dict[str, Any]) -> bool:
+    """A PDF that opened fine and has pages but no text layer at all is (almost always) a scan —
+    pages are images, so the text path has nothing to split and the only way in is vision."""
+    return pdf_result.get('status') == 'completed' and not pdf_result.get('text', '').strip() and pdf_result.get('page_count', 0) > 0
+
+
+SCANNED_PDF_MAX_PAGES_DEFAULT = 30
+SCANNED_PDF_RENDER_DPI = 150
+
+
+def scanned_pdf_max_pages() -> int:
+    """Cap on how many pages of one scanned PDF get sent to the vision model. Every page is a paid
+    vision call, so a 200-page scan must not silently turn into 200 calls; overridable via env."""
+    try:
+        return max(1, int(os.getenv('EXAM_DIAGNOSIS_SCANNED_PDF_MAX_PAGES', SCANNED_PDF_MAX_PAGES_DEFAULT)))
+    except ValueError:
+        return SCANNED_PDF_MAX_PAGES_DEFAULT
+
+
+def render_pdf_pages(path: str | Path, max_pages: int | None = None, dpi: int = SCANNED_PDF_RENDER_DPI) -> list[bytes]:
+    """Rasterise the first `max_pages` pages to PNG bytes (150 dpi is plenty for printed exam text
+    and keeps each image well under typical vision-API size limits)."""
+    import fitz
+    limit = max_pages if max_pages is not None else scanned_pdf_max_pages()
+    document = fitz.open(str(path))
+    images = []
+    for index, page in enumerate(document):
+        if index >= limit:
+            break
+        images.append(page.get_pixmap(dpi=dpi).tobytes('png'))
+    return images
+
+
+def parse_scanned_pdf(vision_parser: 'LocalParser', filename: str, path: str | Path, page_order: int) -> 'PageParseResult':
+    """Run every rendered page of a scanned PDF through the vision parser and fold the per-page
+    results into one PageParseResult, because the data model treats one uploaded asset as one
+    logical page. Partial success is surfaced honestly: any page the vision model couldn't read
+    leaves the whole asset review_required with a warning naming those pages, and if no page could
+    be read at all the asset falls back to manual confirmation like any other unparsed upload."""
+    name = Path(filename).name
+    material_type = LocalParser.classify_material(filename)
+    try:
+        images = render_pdf_pages(path)
+        total_pages = extract_pdf_text(path).get('page_count', len(images))
+    except Exception as exc:
+        return PageParseResult(filename=name, page_order=page_order, material_type=material_type, subject='', ocr_text='', ocr_confidence=0.0, review_required=True, ocr_status='manual_confirmation_required', warning=f'扫描 PDF 无法渲染为图片，请人工确认：{exc}')
+    if not images:
+        return PageParseResult(filename=name, page_order=page_order, material_type=material_type, subject='', ocr_text='', ocr_confidence=0.0, review_required=True, ocr_status='manual_confirmation_required', warning='PDF 没有任何页面，请人工确认。')
+    page_results = [vision_parser.parse_page(f'{name}#p{index + 1}', image, index + 1) for index, image in enumerate(images)]
+    parsed = [(index + 1, result) for index, result in enumerate(page_results) if result.ocr_status == 'completed']
+    failed = [index + 1 for index, result in enumerate(page_results) if result.ocr_status != 'completed']
+    if not parsed:
+        first_warning = page_results[0].warning
+        return PageParseResult(filename=name, page_order=page_order, material_type=material_type, subject='', ocr_text='', ocr_confidence=0.0, review_required=True, ocr_status='manual_confirmation_required', warning=f'扫描 PDF（无文字层）共 {total_pages} 页，视觉解析均未成功：{first_warning}')
+    questions: list[QuestionCandidate] = []
+    for _, result in parsed:
+        questions.extend(result.questions)
+    warnings = []
+    if failed:
+        warnings.append(f"扫描 PDF 第 {', '.join(map(str, failed))} 页视觉解析未成功，请人工核对")
+    if total_pages > len(images):
+        warnings.append(f'扫描 PDF 共 {total_pages} 页，仅识别前 {len(images)} 页（上限 EXAM_DIAGNOSIS_SCANNED_PDF_MAX_PAGES）')
+    return PageParseResult(
+        filename=name,
+        page_order=page_order,
+        material_type=material_type,
+        subject=next((result.subject for _, result in parsed if result.subject), ''),
+        ocr_text='\n\n'.join(result.ocr_text for _, result in parsed if result.ocr_text),
+        ocr_confidence=min(result.ocr_confidence for _, result in parsed),
+        review_required=bool(failed) or total_pages > len(images) or not questions or any(result.review_required for _, result in parsed),
+        questions=questions,
+        warning='；'.join(warnings),
+    )
+
+
+def image_data_url(content: bytes) -> str:
+    """Label the image by what its bytes actually are — rendered PDF pages are PNG, phone uploads
+    are usually JPEG, and some vision endpoints reject a mismatched MIME prefix."""
+    mime = 'image/png' if content.startswith(b'\x89PNG') else 'image/jpeg'
+    return f'data:{mime};base64,{base64.b64encode(content).decode()}'
 
 
 @dataclass
@@ -120,22 +204,50 @@ class LocalParser:
 
 
 class OpenAICompatibleVisionParser(LocalParser):
-    def __init__(self, base_url: str | None = None, api_key: str | None = None, model: str | None = None, timeout: float = 5.0, endpoint: str | None = None):
+    DEFAULT_TIMEOUT = 60.0
+
+    def __init__(self, base_url: str | None = None, api_key: str | None = None, model: str | None = None, timeout: float | None = None, endpoint: str | None = None, on_call=None):
         self.base_url = base_url or endpoint or os.getenv('EXAM_DIAGNOSIS_VISION_BASE_URL')
         self.api_key = api_key or os.getenv('EXAM_DIAGNOSIS_VISION_API_KEY')
         self.model = model or os.getenv('EXAM_DIAGNOSIS_VISION_MODEL')
+        # Vision models reading a full exam page take far longer than the 5s the first version
+        # assumed; explicit argument > env > 60s default.
+        if timeout is None:
+            try:
+                timeout = float(os.getenv('EXAM_DIAGNOSIS_VISION_TIMEOUT', self.DEFAULT_TIMEOUT))
+            except ValueError:
+                timeout = self.DEFAULT_TIMEOUT
         self.timeout = timeout
+        # Same shape as llm.ChatClient's hook, so app.py can log vision calls into MODEL_CALLS
+        # alongside the text roles (latency, success, attempts) without a second bookkeeping path.
+        self.on_call = on_call
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.base_url and self.api_key and self.model)
+
+    def _record(self, **event):
+        if self.on_call is None:
+            return
+        try:
+            self.on_call({'role': 'vision', 'model': self.model, 'base_url': self.base_url, **event})
+        except Exception:
+            pass
 
     def parse_page(self, filename: str, content: str | bytes, page_order: int) -> PageParseResult:
-        if not self.base_url or not self.api_key or not self.model:
+        if not self.configured:
             return PageParseResult(filename=Path(filename).name, page_order=page_order, material_type=self.classify_material(filename), subject='', ocr_text='', ocr_confidence=0.0, review_required=True, ocr_status='manual_confirmation_required', warning='视觉解析未配置完整或调用 failed，请人工确认。')
+        import time
+        started = time.monotonic()
+        attempts = 0
         try:
-            encoded = base64.b64encode(content if isinstance(content, bytes) else content.encode()).decode()
-            payload = {'model': self.model, 'temperature': 0, 'response_format': {'type': 'json_object'}, 'messages': [{'role': 'user', 'content': [{'type': 'text', 'text': '请识别试卷页面，严格只返回 JSON：{"ocr_text":string,"subject":string,"questions":[{"question_number":string,"question_text":string,"confidence":number}]}'}, {'type': 'image_url', 'image_url': {'url': f'data:image/jpeg;base64,{encoded}'}}]}]}
+            image_url = image_data_url(content if isinstance(content, bytes) else content.encode())
+            payload = {'model': self.model, 'temperature': 0, 'response_format': {'type': 'json_object'}, 'messages': [{'role': 'user', 'content': [{'type': 'text', 'text': '请识别试卷页面，严格只返回 JSON：{"ocr_text":string,"subject":string,"questions":[{"question_number":string,"question_text":string,"confidence":number}]}'}, {'type': 'image_url', 'image_url': {'url': image_url}}]}]}
             endpoint = self.base_url.rstrip('/') + '/chat/completions'
             request = urllib.request.Request(endpoint, data=json.dumps(payload).encode(), method='POST', headers={'Authorization': f'Bearer {self.api_key}', 'Content-Type': 'application/json'})
             last_error = None
             for attempt in range(2):
+                attempts = attempt + 1
                 try:
                     with urllib.request.urlopen(request, timeout=self.timeout) as response:
                         outer = json.loads(response.read().decode())
@@ -144,7 +256,6 @@ class OpenAICompatibleVisionParser(LocalParser):
                     last_error = exc
                     if attempt:
                         raise
-                    import time
                     time.sleep(0.05)
             else:
                 raise last_error or RuntimeError('vision request failed')
@@ -169,8 +280,11 @@ class OpenAICompatibleVisionParser(LocalParser):
                 if not isinstance(q, dict) or not isinstance(q.get('question_number'), (str, int)) or not isinstance(q.get('question_text'), str) or not isinstance(q.get('confidence'), (int, float)):
                     raise ValueError('vision question schema invalid')
                 questions.append(QuestionCandidate(str(q['question_number']), q['question_text'], float(q['confidence'])))
+            usage = outer.get('usage') if isinstance(outer, dict) and isinstance(outer.get('usage'), dict) else {}
+            self._record(success=True, attempts=attempts, latency_ms=int((time.monotonic() - started) * 1000), error='', prompt_tokens=usage.get('prompt_tokens'), completion_tokens=usage.get('completion_tokens'), total_tokens=usage.get('total_tokens'))
             return PageParseResult(filename=Path(filename).name, page_order=page_order, material_type=self.classify_material(filename), subject=parsed.get('subject', ''), ocr_text=parsed['ocr_text'], ocr_confidence=max((q.confidence for q in questions), default=0), review_required=False, questions=questions)
         except Exception as exc:
+            self._record(success=False, attempts=attempts, latency_ms=int((time.monotonic() - started) * 1000), error=f'{type(exc).__name__}: {exc}', prompt_tokens=None, completion_tokens=None, total_tokens=None)
             return PageParseResult(
                 filename=Path(filename).name, page_order=page_order,
                 material_type=self.classify_material(filename), subject="",

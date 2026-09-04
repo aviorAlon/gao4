@@ -68,8 +68,9 @@ PYTHONPATH=. pytest -q
   - `EXAM_DIAGNOSIS_VISION_BASE_URL`
   - `EXAM_DIAGNOSIS_VISION_API_KEY`
   - `EXAM_DIAGNOSIS_VISION_MODEL`
-- 视觉接口使用 OpenAI-compatible `/chat/completions` 多模态请求，图片编码为 base64 data URL，并要求 JSON 响应。
+- 视觉接口使用 OpenAI-compatible `/chat/completions` 多模态请求，图片编码为 base64 data URL（按字节自动识别 PNG / JPEG），并要求 JSON 响应。需要一个真正支持图片输入的模型（DeepSeek 目前的对话模型不接受图片；比如通义千问 Qwen-VL 的 OpenAI-compatible 接口就可以）。超时默认 60 秒，可用 `EXAM_DIAGNOSIS_VISION_TIMEOUT` 调整。
 - 未配置视觉解析器、请求失败或响应 JSON 无法解析时，结果明确标记为 `manual_confirmation_required`，不会伪造 OCR 成功。
+- **扫描版 PDF**（手机扫描/复印得到的、没有文字层的 PDF）会被自动识别：文字层为空但有页面的 PDF 不再按"空文本"处理，而是逐页渲染成图片（150 dpi）走视觉解析，再把各页结果合并回这一个上传资料（合并后的 `ocr_text` 按页拼接，题目按页顺序累加，置信度取最差一页）。有任何一页视觉解析没成功，整份资料标 `review_required` 并在 `warning` 里点名是第几页；一页都没成功、或者根本没配视觉解析，就和别的解析失败一样退到人工录入，`warning` 会写清楚原因（"该 PDF 为扫描件……未配置视觉解析"）。每页都是一次付费的视觉调用，所以默认最多识别前 30 页（`EXAM_DIAGNOSIS_SCANNED_PDF_MAX_PAGES` 可改），超出的页数会在 `warning` 里说明。视觉调用和其它角色一样记进 `/api/model-calls`（角色名 `vision`）并受同一份预算/限速约束。
 
 ## 模型推理（题目切分 / 错因诊断 / 验证题生成 / 验证题批改 / 报告概述）
 

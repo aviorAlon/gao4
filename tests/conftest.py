@@ -7,7 +7,9 @@ import yaml
 SHIPPED_KNOWLEDGE_PATH = Path(__file__).resolve().parents[1] / 'data' / 'knowledge' / 'high_math_guangdong_v1.yaml'
 SHIPPED_KNOWLEDGE_VERSION = yaml.safe_load(SHIPPED_KNOWLEDGE_PATH.read_text(encoding='utf-8'))['version']
 
-MODEL_ROLES = ('ANALYSIS', 'REPORT', 'SPLIT', 'VERIFY', 'GRADE')
+# VISION isn't a llm.client_from_env role (it's the image parser's own EXAM_DIAGNOSIS_VISION_*
+# config) but it is a paid endpoint with the same key naming, so it's scrubbed the same way.
+MODEL_ROLES = ('ANALYSIS', 'REPORT', 'SPLIT', 'VERIFY', 'GRADE', 'VISION')
 
 
 @pytest.fixture(autouse=True, scope='session')

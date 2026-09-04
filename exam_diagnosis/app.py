@@ -11,7 +11,7 @@ from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
-from .parser import ModelTextSplitter, OpenAICompatibleVisionParser, extract_pdf_text
+from .parser import LocalParser, ModelTextSplitter, OpenAICompatibleVisionParser, PageParseResult, extract_pdf_text, is_scanned_pdf_result, parse_scanned_pdf
 from .knowledge import match_knowledge_points
 from .diagnosis import diagnose_records, model_grade_attempt
 from .storage import SQLiteMapping
@@ -138,6 +138,25 @@ def guarded_client_from_env(role: str, user_id: str | None, **context: Any):
         })
         return None
     return client_from_env(role, on_call=record_model_call(uid, **context))
+
+
+def vision_parser_for(user_id: str | None, **context: Any) -> OpenAICompatibleVisionParser | None:
+    """The vision parser is configured by its own EXAM_DIAGNOSIS_VISION_* variables rather than
+    through llm.client_from_env (it sends images, not a chat transcript), but it costs money per
+    page just the same — so it goes through the same budget gate and logs into MODEL_CALLS under
+    role 'vision'. None means 'don't call it': unconfigured, or blocked by the budget."""
+    uid = user_id or LOCAL_USER_ID
+    reason = _budget_block_reason(uid)
+    if reason is not None:
+        record_model_call(uid, **context)({
+            'role': 'vision', 'model': None, 'base_url': None, 'latency_ms': 0, 'attempts': 0,
+            'success': False, 'error': reason, 'blocked': True,
+            'prompt_tokens': None, 'completion_tokens': None, 'total_tokens': None,
+        })
+        return None
+    parser = OpenAICompatibleVisionParser(on_call=record_model_call(uid, **context))
+    return parser if parser.configured else None
+
 
 OWNED_BY_PATH_PARAM = {
     'sid': SUBMISSIONS, 'eid': EXAMS, 'asset_id': ASSETS, 'rid': RUNS,
@@ -531,15 +550,32 @@ def run_job(job_id: str):
                 del PAGES[stale['id']]
             for asset in assets_for_exam(job['exam_id']):
                 content = Path(asset['storage_path']).read_bytes()
+                result = None
+                call_context = {'exam_id': job['exam_id'], 'asset_id': asset['id']}
                 if asset.get('media_type', '') == 'application/pdf' or asset['filename'].lower().endswith('.pdf'):
                     pdf_result = extract_pdf_text(asset['storage_path'])
-                    content = pdf_result['text'] if pdf_result['status'] == 'completed' else b''
                     asset['ocr_warning'] = pdf_result.get('warning', '')
+                    if is_scanned_pdf_result(pdf_result):
+                        # No text layer: the pages are pictures, so the text splitter has nothing
+                        # to work with. Render them and go through the vision parser instead.
+                        asset['scanned_pdf'] = True
+                        vision = vision_parser_for(exam.get('user_id'), **call_context)
+                        if vision is None:
+                            result = PageParseResult(filename=Path(asset['filename']).name, page_order=asset['page_order'], material_type=classify_filename(asset['filename']), subject='', ocr_text='', ocr_confidence=0.0, review_required=True, ocr_status='manual_confirmation_required', warning=f"该 PDF 为扫描件（共 {pdf_result['page_count']} 页，无文字层），未配置视觉解析（EXAM_DIAGNOSIS_VISION_*），请人工录入题目。")
+                        else:
+                            result = parse_scanned_pdf(vision, asset['filename'], asset['storage_path'], asset['page_order'])
+                    else:
+                        content = pdf_result['text'] if pdf_result['status'] == 'completed' else b''
                 elif asset.get('media_type', '').startswith('text/'):
                     content = content.decode('utf-8', errors='replace')
-                split_client = guarded_client_from_env('split', exam.get('user_id'), exam_id=job['exam_id'], asset_id=asset['id'])
-                parser = ModelTextSplitter(split_client) if isinstance(content, str) else OpenAICompatibleVisionParser()
-                result = parser.parse_page(asset['filename'], content, asset['page_order'])
+                if result is None:
+                    if isinstance(content, str):
+                        parser = ModelTextSplitter(guarded_client_from_env('split', exam.get('user_id'), **call_context))
+                    else:
+                        # LocalParser on bytes is the honest "no vision configured / blocked" answer:
+                        # manual confirmation, never a fabricated parse.
+                        parser = vision_parser_for(exam.get('user_id'), **call_context) or LocalParser()
+                    result = parser.parse_page(asset['filename'], content, asset['page_order'])
                 submission = SUBMISSIONS[exam['submission_id']]
                 result.subject_mismatch = bool(result.subject and result.subject != submission['subject'])
                 page = {'id': str(uuid4()), 'asset_id': asset['id'], 'exam_id': job['exam_id'], 'user_id': exam.get('user_id', LOCAL_USER_ID), **result.to_dict()}
@@ -637,6 +673,11 @@ def list_exam_pages(eid: str):
             'exclusion_reason': page.get('exclusion_reason', ''),
             'inclusion_decided_by': page.get('inclusion_decided_by', 'machine'),
             'review_required': page.get('review_required', True),
+            # The parser's own explanation of why a page needs a human (scanned PDF with no
+            # vision configured, pages the vision model couldn't read, ...) — without it the UI
+            # can only say "please confirm" with no hint of what went wrong.
+            'warning': page.get('warning', ''),
+            'questions': page.get('questions', []),
         })
     return {'exam_id': eid, 'pages': pages, 'excluded_pages': EXAMS[eid].get('excluded_pages', [])}
 
