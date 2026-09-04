@@ -105,6 +105,13 @@ PYTHONPATH=. pytest -q
 - PDF 和 Word 从同一份中间结构（`export.report_blocks`：标题 / 段落 / 列表 / 编号列表）渲染，章节和内容与 Markdown 版一致，包括"未通过复核的验证题答案不展示"这条规则——导出文件里同样只出现占位说明，不会带出未审核的答案。
 - PDF 用已有依赖 PyMuPDF 的 Story 排版引擎生成（自带中文回退字体，A4 自动分页），不需要再装 weasyprint/reportlab 这类工具；装了 `fonttools` 时会做字体子集化，否则每份 PDF 会内嵌整套约 3.5MB 的中文字体（内容仍然正确，只是文件大）。Word 用 `python-docx`，标题/列表用 Word 内置样式，中文字体指定为宋体。
 
+## 桌面客户端（Tauri）
+
+- `frontend/src-tauri/` 是 Tauri 2 的桌面壳：同一套 React 前端装进原生窗口（Windows 用系统自带的 WebView2），不是另写一份 UI。需要 Rust 工具链（`cargo`）和 `frontend` 目录下的 `npm install`。
+- 开发：`npm --prefix frontend run desktop:dev`（自动起 Vite 再开窗口）；打包：`npm --prefix frontend run desktop:build`，产物在 `frontend/src-tauri/target/release/`（exe 和安装包）。
+- 桌面壳目前**只是前端**：它连的是 `http://127.0.0.1:8765` 的 API 后端，后端仍要按"启动"一节单独跑起来；后端没起时首页会提示"请检查后端服务是否在运行"。把 Python 后端打进安装包（sidecar）是下一步，不在这一版里。
+- 窗口的 CSP 只放行本机后端（127.0.0.1/localhost:8765）、Google Fonts 和内联样式（antd 需要）；改后端端口要同步改 `src-tauri/tauri.conf.json` 里的 `connect-src`。
+
 ## 系统状态
 
 - `GET /api/system/status`：每个模型角色（六个文本角色 + `vision`）是否配置、实际使用的模型/接口/超时、对应的环境变量前缀——只报"有没有 key"，绝不带 key 本身；再加登录模式、后台任务数、预算拦截原因、数据库/上传目录路径、当前用户视角的知识库分区。
