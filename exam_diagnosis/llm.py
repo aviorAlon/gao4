@@ -141,6 +141,30 @@ def _extract_json(outer: dict[str, Any]) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+ROLE_PURPOSES = {
+    'split': '题目切分', 'analysis': '错因诊断', 'verify': '验证题生成',
+    'grade': '验证题批改', 'report': '报告概述', 'match': '知识点语义匹配',
+}
+
+
+def role_status(role: str) -> dict[str, Any]:
+    """What an operator needs to know about a role — is it live, and with what — without the
+    key itself ever leaving the process (only whether one is set)."""
+    if role not in ROLE_DEFAULTS:
+        raise ValueError(f'unknown model role: {role}')
+    prefix = f'EXAM_DIAGNOSIS_{role.upper()}_'
+    defaults = ROLE_DEFAULTS[role]
+    return {
+        'role': role,
+        'purpose': ROLE_PURPOSES.get(role, role),
+        'configured': bool(os.getenv(prefix + 'API_KEY')),
+        'base_url': os.getenv(prefix + 'BASE_URL') or defaults['base_url'],
+        'model': os.getenv(prefix + 'MODEL') or defaults['model'],
+        'timeout': float(os.getenv(prefix + 'TIMEOUT') or 30),
+        'env_prefix': prefix,
+    }
+
+
 def client_from_env(role: str, on_call: Callable[[dict[str, Any]], None] | None = None) -> ChatClient | None:
     """Build a ChatClient for `role` from EXAM_DIAGNOSIS_<ROLE>_* env vars.
 

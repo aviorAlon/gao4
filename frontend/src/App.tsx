@@ -1,14 +1,18 @@
-import { useEffect, useState } from 'react'
-import { Button, ConfigProvider, Typography } from 'antd'
+import { Suspense, lazy, useEffect, useState } from 'react'
+import { Button, ConfigProvider, Spin, Typography } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 import { BrowserRouter, Routes, Route, Link, useLocation } from 'react-router-dom'
-import HomePage from './pages/HomePage'
-import SubmissionPage from './pages/SubmissionPage'
-import ExamPage from './pages/ExamPage'
-import ReportPage from './pages/ReportPage'
-import LoginPage from './pages/LoginPage'
-import KnowledgePage from './pages/KnowledgePage'
 import { fetchMe, getToken, logout, type MeResponse } from './api'
+
+// Each page is its own chunk, loaded on first visit — the report page alone pulls in a fair
+// amount of antd that the home page never needs.
+const HomePage = lazy(() => import('./pages/HomePage'))
+const SubmissionPage = lazy(() => import('./pages/SubmissionPage'))
+const ExamPage = lazy(() => import('./pages/ExamPage'))
+const ReportPage = lazy(() => import('./pages/ReportPage'))
+const LoginPage = lazy(() => import('./pages/LoginPage'))
+const KnowledgePage = lazy(() => import('./pages/KnowledgePage'))
+const StatusPage = lazy(() => import('./pages/StatusPage'))
 
 /** Who the backend thinks we are, in the page's top-right corner. In the default local setup this
  * says "本地用户" and offers a login link; with a session it names the account and offers logout. */
@@ -77,15 +81,18 @@ export default function App() {
     <ConfigProvider locale={zhCN} theme={theme}>
       <BrowserRouter>
         <AuthBar />
-        <Routes>
-          <Route path="/login" element={<LoginPage />} />
-          <Route path="/knowledge" element={<KnowledgePage />} />
-          <Route path="/" element={<HomePage />} />
-          <Route path="/submissions/:id" element={<SubmissionPage />} />
-          <Route path="/exams/:id" element={<ExamPage />} />
-          <Route path="/reports/:runId" element={<ReportPage />} />
-          <Route path="/reports" element={<ReportPage />} />
-        </Routes>
+        <Suspense fallback={<div className="page-shell"><Spin /></div>}>
+          <Routes>
+            <Route path="/login" element={<LoginPage />} />
+            <Route path="/knowledge" element={<KnowledgePage />} />
+            <Route path="/status" element={<StatusPage />} />
+            <Route path="/" element={<HomePage />} />
+            <Route path="/submissions/:id" element={<SubmissionPage />} />
+            <Route path="/exams/:id" element={<ExamPage />} />
+            <Route path="/reports/:runId" element={<ReportPage />} />
+            <Route path="/reports" element={<ReportPage />} />
+          </Routes>
+        </Suspense>
       </BrowserRouter>
     </ConfigProvider>
   )

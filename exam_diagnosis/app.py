@@ -21,7 +21,7 @@ from .tasks import TaskQueue
 from . import auth
 from .knowledge import KnowledgePartitionNotFound, available_partitions, find_partition
 from .review import APPROVED, NEEDS_REVIEW, review_report, withhold_unreviewed_answer
-from .llm import client_from_env
+from .llm import ROLE_DEFAULTS, client_from_env, role_status as llm_role_status
 from .reporting import generate_report_summary
 from .env_file import load_env_file
 
@@ -1709,3 +1709,37 @@ def export_knowledge_base(kb_id: str):
     text = yaml.safe_dump(payload, allow_unicode=True, sort_keys=False)
     return Response(text, media_type='application/x-yaml', headers={'Content-Disposition': f'attachment; filename="knowledge-base-{kb_id[:8]}.yaml"'})
 
+
+
+# --- System status ------------------------------------------------------------------------------
+
+
+@app.get('/api/system/status')
+def system_status(user_id: str = Depends(current_user_id)):
+    """One place to answer "is the model actually on, and what is this server running with" —
+    previously that took a curl of /api/model-calls and reading the env by hand. Never includes
+    a key, only whether each role has one."""
+    vision = OpenAICompatibleVisionParser()
+    roles = [llm_role_status(role) for role in ROLE_DEFAULTS]
+    roles.append({
+        'role': 'vision', 'purpose': '图片 / 扫描 PDF 视觉解析', 'configured': vision.configured,
+        'base_url': vision.base_url, 'model': vision.model, 'timeout': vision.timeout, 'env_prefix': 'EXAM_DIAGNOSIS_VISION_',
+    })
+    my_tasks = [item for item in TASKS.values() if item.get('user_id', LOCAL_USER_ID) == user_id]
+    return {
+        'application': {'name': app.title, 'version': app.version},
+        'auth': {'required': AUTH_REQUIRED, 'session_ttl_hours': SESSION_TTL_HOURS},
+        'storage': {'database': str(SUBMISSIONS.path), 'uploads': str((Path.cwd() / 'data' / 'uploads').resolve())},
+        'model_roles': roles,
+        'budget': {
+            'daily_token_budget': MODEL_DAILY_TOKEN_BUDGET,
+            'max_calls_per_minute': MODEL_MAX_CALLS_PER_MINUTE,
+            'block_reason': _budget_block_reason(user_id),
+        },
+        'tasks': {
+            'workers': TASK_QUEUE.workers,
+            'active': sum(1 for item in my_tasks if item.get('status') in ('queued', 'running')),
+            'failed': sum(1 for item in my_tasks if item.get('status') == 'failed'),
+        },
+        'knowledge': {'partitions': available_partitions(user_id=user_id)},
+    }

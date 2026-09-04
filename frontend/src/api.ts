@@ -225,6 +225,69 @@ export async function loadReport(runId: string, onWaiting?: () => void): Promise
   }
 }
 
+// --- System status / observability ---
+
+export interface ModelRoleStatus {
+  role: string
+  purpose: string
+  configured: boolean
+  base_url: string | null
+  model: string | null
+  timeout: number
+  env_prefix: string
+}
+
+export interface SystemStatus {
+  application: { name: string; version: string }
+  auth: { required: boolean; session_ttl_hours: number }
+  storage: { database: string; uploads: string }
+  model_roles: ModelRoleStatus[]
+  budget: { daily_token_budget: number | null; max_calls_per_minute: number | null; block_reason: string | null }
+  tasks: { workers: number; active: number; failed: number }
+  knowledge: { partitions: KnowledgePartition[] }
+}
+
+export async function fetchSystemStatus(): Promise<SystemStatus> {
+  const { data } = await api.get<SystemStatus>('/api/system/status')
+  return data
+}
+
+export interface ModelCall {
+  id: string
+  role: string
+  model: string | null
+  base_url: string | null
+  created_at: string
+  latency_ms: number
+  attempts: number
+  success: boolean
+  error: string
+  blocked?: boolean
+  prompt_tokens: number | null
+  completion_tokens: number | null
+  total_tokens: number | null
+  exam_id?: string
+  run_id?: string
+  record_id?: string
+  asset_id?: string
+}
+
+export interface ModelCallsResponse {
+  calls: ModelCall[]
+  summary: { total: number; succeeded: number; failed: number; avg_latency_ms: number; total_tokens: number }
+  budget: { daily_token_budget: number | null; tokens_used_today: number; daily_tokens_remaining: number | null; max_calls_per_minute: number | null; calls_in_last_minute: number }
+}
+
+export async function listModelCalls(limit = 50): Promise<ModelCallsResponse> {
+  const { data } = await api.get<ModelCallsResponse>('/api/model-calls', { params: { limit } })
+  return data
+}
+
+export async function listTasks(limit = 50): Promise<{ tasks: TaskRecord[]; workers: number }> {
+  const { data } = await api.get('/api/tasks', { params: { limit } })
+  return data
+}
+
 // --- Knowledge partitions ---
 
 export interface KnowledgePartition {

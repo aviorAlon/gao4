@@ -75,6 +75,8 @@ export default function HomePage() {
             <span>{submissions.length ? `${submissions.length} 个任务在案` : '还没有任务'}</span>
             <span>·</span>
             <Link to="/knowledge">知识库</Link>
+            <span>·</span>
+            <Link to="/status">系统状态</Link>
           </>
         }
       />
