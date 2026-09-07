@@ -115,6 +115,7 @@ PYTHONPATH=. pytest -q
 - 运行时：壳启动即拉起 `backend/exam-diagnosis-backend.exe --port 0 --data-dir <用户 AppData> --parent-pid <壳的 pid>`，读它打出的 `LISTENING host:port`，前端通过 Tauri 命令 `api_base` 拿到地址，再轮询 `/api/health` 确认就绪才显示界面；壳正常退出时杀掉后端进程，壳被强杀/崩溃时后端靠 `--parent-pid` 看门狗自己退出（Windows 上等父进程句柄被触发，其它平台轮询 pid），不会留下占着端口的孤儿进程。子进程的环境里会剔除所有 `EXAM_DIAGNOSIS_*_API_KEY`——桌面版的 key 一律来自设置页写的 `config.json`，不会意外继承开发者 shell 里的变量。
 - 没找到内置后端时（`tauri dev` 但还没跑 `build_backend.py`，或开发者自己起后端），壳不拉起任何进程，前端退回默认的 `127.0.0.1:8765`；也可用 `EXAM_DIAGNOSIS_BACKEND_EXE` 指定后端程序路径。
 - 窗口的 CSP 放行本机任意端口（后端端口是动态的）、Google Fonts 和内联样式（antd 需要）。
+- 后端 CORS 同时放行桌面 WebView 的来源（Windows 上是 `http://tauri.localhost`，其它平台 `tauri://localhost`）——第一版漏了这个，表现为安装后一直停在"本地服务没有响应"，而终端 curl 一切正常。启动页失败时现在会显示实际连接的地址和最后一次错误原因，并可重试。
 - 数据位置：Windows 上是 `%APPDATA%\com.examdiagnosis.desktop\`（数据库、上传文件、`config.json`）。
 
 ## 系统状态

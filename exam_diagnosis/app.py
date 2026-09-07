@@ -257,7 +257,10 @@ app = FastAPI(title="Exam Diagnosis", version="0.1.0", dependencies=[Depends(enf
 # localhost allowlist is low; tighten this before this ever listens on more than 127.0.0.1.
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r'https?://(localhost|127\.0\.0\.1)(:\d+)?',
+    # The desktop shell's webview is an origin too: http://tauri.localhost on Windows (WebView2),
+    # tauri://localhost elsewhere. Missed the first time round — every request from the packaged
+    # app was refused by the browser layer while curl from a terminal (no Origin header) passed.
+    allow_origin_regex=r'(https?://(localhost|127\.0\.0\.1|tauri\.localhost)(:\d+)?|tauri://localhost)',
     allow_credentials=True,
     allow_methods=['*'],
     allow_headers=['*'],

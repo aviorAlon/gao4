@@ -2,15 +2,21 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
-import { isDesktopShell, resolveApiBase, waitForBackend } from './api'
+import { API_BASE, isDesktopShell, resolveApiBase, waitForBackend } from './api'
 
 const root = createRoot(document.getElementById('root')!)
 
-function showBooting(text: string) {
+const shellStyle = { fontFamily: "'Noto Sans SC', sans-serif", color: '#63666b', padding: '48px 40px', maxWidth: 620 } as const
+
+function showBooting(text: string, detail?: string, retry?: () => void) {
   root.render(
-    <div style={{ fontFamily: "'Noto Sans SC', sans-serif", color: '#63666b', padding: '48px 40px', maxWidth: 560 }}>
+    <div style={shellStyle}>
       <div style={{ fontSize: 12, letterSpacing: '0.18em', textTransform: 'uppercase', marginBottom: 12 }}>Exam Diagnosis</div>
       <div style={{ fontSize: 16, color: '#1c1e21' }}>{text}</div>
+      {detail && <pre style={{ marginTop: 16, fontSize: 12, whiteSpace: 'pre-wrap', background: '#f2f0e6', padding: 12, border: '1px solid #ded9cb' }}>{detail}</pre>}
+      {retry && (
+        <button onClick={retry} style={{ marginTop: 16, padding: '6px 18px', border: '1px solid #c7391f', background: '#c7391f', color: '#fff', cursor: 'pointer' }}>重试</button>
+      )}
     </div>,
   )
 }
@@ -20,15 +26,25 @@ async function bootstrap() {
   // the API is, then confirm the API answers before showing anything that would call it.
   if (isDesktopShell()) {
     showBooting('正在启动本地服务…')
+    let base = ''
     try {
-      await resolveApiBase()
+      base = await resolveApiBase()
     } catch (e) {
-      showBooting(`无法启动本地服务：${e instanceof Error ? e.message : String(e)}`)
+      showBooting('无法从桌面壳获取本地服务地址', String(e instanceof Error ? e.message : e), bootstrap)
       return
     }
-    const ready = await waitForBackend(30000, (attempt) => showBooting(`正在启动本地服务…（${attempt}）`))
+    let lastError = ''
+    const ready = await waitForBackend(60000, (attempt, error) => {
+      lastError = error
+      showBooting(`正在启动本地服务…（第 ${attempt} 次探测）`, `地址：${base || API_BASE}\n首次启动时杀毒软件扫描可能需要更久。`)
+    })
     if (!ready) {
-      showBooting('本地服务没有响应。请关闭应用后重新打开；如果反复出现，把系统状态页的信息反馈给我们。')
+      showBooting(
+        '本地服务没有响应',
+        `地址：${base || API_BASE}\n最后一次错误：${lastError || '未知'}\n\n` +
+          (base ? '后端进程已启动但页面连不上——请把这段信息反馈给我们。' : '桌面壳没有找到内置后端（api_base 为空），当前尝试的是默认地址；如果你是开发者，请先运行后端或 scripts/build_backend.py。'),
+        bootstrap,
+      )
       return
     }
   }

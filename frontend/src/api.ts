@@ -29,14 +29,17 @@ export async function resolveApiBase(): Promise<string> {
 
 /** Poll /api/health until the backend answers — the desktop shell has already waited for the
  * process to bind, but the web deployment may be started before its backend. */
-export async function waitForBackend(timeoutMs = 20000, onTick?: (attempt: number) => void): Promise<boolean> {
+export async function waitForBackend(timeoutMs = 20000, onTick?: (attempt: number, lastError: string) => void): Promise<boolean> {
   const deadline = Date.now() + timeoutMs
   for (let attempt = 1; Date.now() < deadline; attempt++) {
     try {
       await api.get('/api/health', { timeout: 2000 })
       return true
-    } catch {
-      onTick?.(attempt)
+    } catch (e: any) {
+      // Surface the real failure: a CORS refusal, a connection error and a timeout all need
+      // different fixes, and "no response" hides which one it was.
+      const reason = e?.response ? `HTTP ${e.response.status}` : e?.code === 'ERR_NETWORK' ? '网络层拒绝（很可能是 CORS 或端口不通）' : e?.message ?? String(e)
+      onTick?.(attempt, reason)
       await new Promise((resolve) => setTimeout(resolve, 800))
     }
   }
