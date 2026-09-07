@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
-import { Alert, Button, Card, Flex, Form, Input, Segmented, Typography } from 'antd'
-import { login, register } from '../api'
+import { Alert, Button, Card, Flex, Form, Input, Segmented, Space, Typography } from 'antd'
+import { ArrowLeftOutlined } from '@ant-design/icons'
+import { fetchHealth, login, register } from '../api'
 import { Masthead } from '../chart/Chart'
 import '../chart/chart.css'
 
@@ -21,6 +22,14 @@ export default function LoginPage() {
   const [mode, setMode] = useState<'login' | 'register'>('login')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // null until the backend has answered — don't offer "continue without logging in" on a guess.
+  const [authRequired, setAuthRequired] = useState<boolean | null>(null)
+
+  useEffect(() => {
+    fetchHealth().then((h) => setAuthRequired(h.auth_required)).catch(() => setAuthRequired(null))
+  }, [])
+
+  const target = next.startsWith('/') ? next : '/'
 
   async function submit(values: { username: string; password: string; display_name?: string }) {
     setBusy(true)
@@ -28,7 +37,7 @@ export default function LoginPage() {
     try {
       if (mode === 'login') await login(values.username, values.password)
       else await register(values.username, values.password, values.display_name)
-      navigate(next.startsWith('/') ? next : '/', { replace: true })
+      navigate(target, { replace: true })
     } catch (e: any) {
       const code = e?.response?.data?.error ?? e?.response?.data?.detail?.error
       setError(ERROR_TEXT[code] ?? code ?? e.message ?? '请求失败')
@@ -37,9 +46,20 @@ export default function LoginPage() {
     }
   }
 
+  const optional = authRequired === false
+
   return (
     <div className="page-shell" style={{ maxWidth: 480 }}>
-      <Masthead kicker="Exam Diagnosis" caseId="" title={mode === 'login' ? '登录' : '注册账号'} meta={<span>每个账号只看得到自己的考试和报告</span>} animate={false} />
+      {optional && (
+        <Link to={target} style={{ display: 'inline-block', marginBottom: 12 }}>
+          <ArrowLeftOutlined /> 返回，不登录
+        </Link>
+      )}
+      <Masthead
+        kicker="Exam Diagnosis" caseId="" animate={false}
+        title={mode === 'login' ? '登录' : '注册账号'}
+        meta={<span>{authRequired ? '这个服务要求登录后使用' : '每个账号只看得到自己的考试和报告'}</span>}
+      />
       <Card>
         <Flex vertical gap="middle">
           <Segmented
@@ -60,13 +80,22 @@ export default function LoginPage() {
             <Form.Item name="password" label="密码" rules={[{ required: true, message: '请输入密码' }, { min: mode === 'register' ? 8 : 1, message: '密码至少 8 位' }]}>
               <Input.Password autoComplete={mode === 'login' ? 'current-password' : 'new-password'} />
             </Form.Item>
-            <Button type="primary" htmlType="submit" loading={busy} block>
-              {mode === 'login' ? '登录' : '注册并登录'}
-            </Button>
+            <Space orientation="vertical" style={{ width: "100%" }} size="small">
+              <Button type="primary" htmlType="submit" loading={busy} block>
+                {mode === 'login' ? '登录' : '注册并登录'}
+              </Button>
+              {optional && (
+                <Button block onClick={() => navigate(target)}>
+                  不登录，直接使用
+                </Button>
+              )}
+            </Space>
           </Form>
-          <Text type="secondary">
-            本地单人使用、后端没开启登录要求时，可以<Link to="/">不登录直接使用</Link>。
-          </Text>
+          {optional && (
+            <Text type="secondary">
+              登录是可选的：不登录时数据归"本地用户"，同一台机器上谁都能看；注册账号后各自只看到自己的考试和报告。
+            </Text>
+          )}
         </Flex>
       </Card>
     </div>

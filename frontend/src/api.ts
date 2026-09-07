@@ -56,6 +56,8 @@ export const api = axios.create({
 // --- Session token ---
 
 export const TOKEN_KEY = 'exam_diagnosis_token'
+/** Fired when a request came back 401: the session is gone, the router should show the login page. */
+export const AUTH_LOST_EVENT = 'exam-diagnosis:auth-lost'
 
 export function getToken(): string | null {
   try { return localStorage.getItem(TOKEN_KEY) } catch { return null }
@@ -83,9 +85,9 @@ api.interceptors.response.use(
     // the backend requires one we don't have): drop the stale token and go sign in.
     if (status === 401 && !url.startsWith('/api/auth/login') && !url.startsWith('/api/auth/register')) {
       setToken(null)
-      if (window.location.pathname !== '/login') {
-        window.location.assign(`/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`)
-      }
+      // An in-app event, not window.location.assign: the desktop shell serves the SPA from its
+      // own protocol and a full reload to /login is not something we can rely on there.
+      window.dispatchEvent(new CustomEvent(AUTH_LOST_EVENT, { detail: { next: window.location.pathname + window.location.search } }))
     }
     return Promise.reject(error)
   },
@@ -109,6 +111,13 @@ export async function login(username: string, password: string): Promise<Session
 
 export async function logout(): Promise<void> {
   try { await api.post('/api/auth/logout') } finally { setToken(null) }
+}
+
+export interface HealthResponse { status: string; application: string; version: string; data_dir: string; auth_required: boolean }
+
+export async function fetchHealth(): Promise<HealthResponse> {
+  const { data } = await api.get<HealthResponse>('/api/health')
+  return data
 }
 
 export async function fetchMe(): Promise<MeResponse> {
@@ -481,8 +490,8 @@ export async function importKnowledgeBase(file: File): Promise<KnowledgeBase> {
   return data
 }
 
-export function knowledgeBaseExportUrl(id: string) {
-  return apiUrl(`/api/knowledge-bases/${id}/export`)
+export function downloadKnowledgeBase(id: string) {
+  return downloadFromApi(`/api/knowledge-bases/${id}/export`, `knowledge-base-${id.slice(0, 8)}.yaml`)
 }
 
 /** Effective points for a scope as the current user sees them (public base + their own). */
@@ -885,15 +894,43 @@ export async function listMasteryRecords(submissionId: string): Promise<{ record
 // Fetched via axios (so the X-User-Id header rides along, same as every other call) and then
 // handed to the browser as a download — a plain <a href> to this endpoint would just navigate to
 // raw JSON in the tab instead of saving a file, and would skip the auth header the API expects.
-export async function downloadSubmissionExport(submissionId: string, filenameHint: string) {
-  const { data } = await api.get(`/api/submissions/${submissionId}/export`)
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+/** Hand a file to the user. The desktop shell has no browser download manager and navigating
+ * the webview to an attachment URL would replace the app with the raw response — so there it
+ * goes through a native "另存为" dialog and a Rust command that writes the bytes; in a browser
+ * it's the usual blob + <a download>. Returns false when the user cancelled the dialog. */
+export async function saveBlob(blob: Blob, filename: string): Promise<boolean> {
+  if (isDesktopShell()) {
+    const { save } = await import('@tauri-apps/plugin-dialog')
+    const { invoke } = await import('@tauri-apps/api/core')
+    const extension = filename.includes('.') ? filename.slice(filename.lastIndexOf('.') + 1) : ''
+    const path = await save({ defaultPath: filename, filters: extension ? [{ name: extension.toUpperCase(), extensions: [extension] }] : undefined })
+    if (!path) return false
+    const bytes = new Uint8Array(await blob.arrayBuffer())
+    let binary = ''
+    for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+    await invoke('save_file', { path, dataBase64: btoa(binary) })
+    return true
+  }
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
   link.href = url
-  link.download = `exam-diagnosis-${filenameHint}-${submissionId.slice(0, 8)}.json`
+  link.download = filename
   document.body.appendChild(link)
   link.click()
   link.remove()
   URL.revokeObjectURL(url)
+  return true
+}
+
+/** Download an API resource (export endpoints) with the session headers attached — a plain
+ * <a href> would neither carry the bearer token nor work inside the desktop shell. */
+export async function downloadFromApi(path: string, filename: string): Promise<boolean> {
+  const response = await api.get(path, { responseType: 'blob' })
+  return saveBlob(response.data as Blob, filename)
+}
+
+export async function downloadSubmissionExport(submissionId: string, filenameHint: string) {
+  const { data } = await api.get(`/api/submissions/${submissionId}/export`)
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+  return saveBlob(blob, `exam-diagnosis-${filenameHint}-${submissionId.slice(0, 8)}.json`)
 }

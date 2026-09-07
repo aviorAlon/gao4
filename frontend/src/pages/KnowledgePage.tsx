@@ -5,7 +5,7 @@ import {
 } from 'antd'
 import { DeleteOutlined, DownloadOutlined, PlusOutlined, UploadOutlined } from '@ant-design/icons'
 import {
-  createKnowledgeBase, deleteKnowledgeBase, deleteKnowledgePoint, importKnowledgeBase, knowledgeBaseExportUrl,
+  createKnowledgeBase, deleteKnowledgeBase, deleteKnowledgePoint, downloadKnowledgeBase, importKnowledgeBase,
   listKnowledgeBases, listKnowledgePartitions, listPartitionPoints, upsertKnowledgePoint,
   type KnowledgeBase, type KnowledgePartition, type KnowledgePoint, type KnowledgeScope,
 } from '../api'
@@ -266,7 +266,7 @@ export default function KnowledgePage() {
                   </Space>
                   <Space>
                     <Button type="primary" icon={<PlusOutlined />} onClick={() => setAdding(true)}>添加知识点</Button>
-                    <a href={knowledgeBaseExportUrl(selectedBase.id)}><Button icon={<DownloadOutlined />}>导出 YAML</Button></a>
+                    <Button icon={<DownloadOutlined />} onClick={() => downloadKnowledgeBase(selectedBase.id).catch((e) => message.error(errorText(e)))}>导出 YAML</Button>
                     <Popconfirm title="删除整个自定义知识库？将恢复为公共知识库。" onConfirm={() => removeBase(selectedBase)}>
                       <Button danger icon={<DeleteOutlined />}>删除我的库</Button>
                     </Popconfirm>

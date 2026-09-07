@@ -5,10 +5,10 @@ import {
   Result, Space, Spin, Table, Tag, Typography, Row, Col, message,
 } from 'antd'
 import {
-  BulbOutlined, CheckCircleOutlined, ExclamationCircleOutlined,
+  BulbOutlined, CheckCircleOutlined, DownloadOutlined, ExclamationCircleOutlined,
 } from '@ant-design/icons'
 import {
-  apiUrl, loadReport, listMasteryRecords, listVerificationQuestions, reviewVerificationQuestion,
+  downloadFromApi, loadReport, listMasteryRecords, listVerificationQuestions, reviewVerificationQuestion,
   submitVerificationAttempt, type AnalysisReport, type MasteryRecord, type ReviewOrderItem,
   type VerificationQuestionEntity, type WrongQuestion,
 } from '../api'
@@ -476,11 +476,16 @@ export default function ReportPage() {
           <VerificationQuestionsCard questions={verificationQuestions} mastery={mastery} onChanged={reloadVerification} />
 
           <Divider />
-          <Space>
-            <a href={apiUrl(`/api/reports/${report.analysis_run_id}/export?format=md`)}>导出 Markdown</a>
-            <a href={apiUrl(`/api/reports/${report.analysis_run_id}/export?format=html`)}>导出 HTML</a>
-            <a href={apiUrl(`/api/reports/${report.analysis_run_id}/export?format=pdf`)}>导出 PDF</a>
-            <a href={apiUrl(`/api/reports/${report.analysis_run_id}/export?format=docx`)}>导出 Word</a>
+          <Space wrap>
+            {([['pdf', 'PDF'], ['docx', 'Word'], ['md', 'Markdown'], ['html', 'HTML']] as const).map(([format, label]) => (
+              <Button
+                key={format} icon={<DownloadOutlined />}
+                onClick={() => downloadFromApi(`/api/reports/${report.analysis_run_id}/export?format=${format}`, `exam-diagnosis-report-${report.analysis_run_id.slice(0, 8)}.${format}`)
+                  .catch((e) => message.error(e?.response?.data?.error ?? e.message ?? '导出失败'))}
+              >
+                导出 {label}
+              </Button>
+            ))}
           </Space>
         </>
       )}

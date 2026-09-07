@@ -31,6 +31,35 @@ fn api_base(state: tauri::State<'_, Backend>) -> String {
     state.api_base.clone()
 }
 
+/// Write bytes the frontend already holds (an export it fetched from the backend) to a path the
+/// user picked in the native save dialog. The webview has no download manager of its own, and
+/// navigating it to an attachment URL would replace the app with the raw response.
+#[tauri::command]
+fn save_file(path: String, data_base64: String) -> Result<(), String> {
+    let bytes = base64_decode(&data_base64).ok_or("无法解码要保存的内容")?;
+    std::fs::write(&path, bytes).map_err(|e| format!("写入 {path} 失败: {e}"))
+}
+
+fn base64_decode(input: &str) -> Option<Vec<u8>> {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = Vec::with_capacity(input.len() * 3 / 4);
+    let mut buffer: u32 = 0;
+    let mut bits = 0;
+    for byte in input.bytes() {
+        if byte == b'=' || byte == b'\n' || byte == b'\r' {
+            continue;
+        }
+        let value = TABLE.iter().position(|&c| c == byte)? as u32;
+        buffer = (buffer << 6) | value;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push(((buffer >> bits) & 0xFF) as u8);
+        }
+    }
+    Some(out)
+}
+
 /// Where the backend executable is. Release: inside the bundled resources. Debug (`tauri dev`):
 /// the same folder under src-tauri/, or whatever EXAM_DIAGNOSIS_BACKEND_EXE points at.
 fn locate_backend(app: &tauri::AppHandle) -> Option<PathBuf> {
@@ -130,7 +159,8 @@ fn stop_backend(backend: &Backend) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![api_base])
+        .plugin(tauri_plugin_dialog::init())
+        .invoke_handler(tauri::generate_handler![api_base, save_file])
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(tauri_plugin_log::Builder::default().level(log::LevelFilter::Info).build())?;

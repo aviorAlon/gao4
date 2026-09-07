@@ -1,8 +1,8 @@
-import { Suspense, lazy, useEffect, useState } from 'react'
-import { Button, ConfigProvider, Spin, Typography } from 'antd'
+import { Suspense, lazy } from 'react'
+import { ConfigProvider, Spin } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
-import { BrowserRouter, Routes, Route, Link, useLocation } from 'react-router-dom'
-import { fetchMe, getToken, logout, type MeResponse } from './api'
+import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import AppNav from './AppNav'
 
 // Each page is its own chunk, loaded on first visit — the report page alone pulls in a fair
 // amount of antd that the home page never needs.
@@ -14,29 +14,6 @@ const LoginPage = lazy(() => import('./pages/LoginPage'))
 const KnowledgePage = lazy(() => import('./pages/KnowledgePage'))
 const StatusPage = lazy(() => import('./pages/StatusPage'))
 const SettingsPage = lazy(() => import('./pages/SettingsPage'))
-
-/** Who the backend thinks we are, in the page's top-right corner. In the default local setup this
- * says "本地用户" and offers a login link; with a session it names the account and offers logout. */
-function AuthBar() {
-  const location = useLocation()
-  const token = getToken()
-  const [me, setMe] = useState<MeResponse | null>(null)
-
-  useEffect(() => {
-    if (location.pathname === '/login') return
-    fetchMe().then(setMe).catch(() => setMe(null))
-  }, [location.pathname, token])
-
-  if (location.pathname === '/login' || !me) return null
-  return (
-    <div style={{ position: 'absolute', top: 12, right: 20, display: 'flex', gap: 12, alignItems: 'center' }}>
-      <Typography.Text type="secondary">{me.anonymous ? '本地用户（未登录）' : me.user.display_name}</Typography.Text>
-      {me.anonymous
-        ? <Link to="/login">登录</Link>
-        : <Button size="small" onClick={() => logout().then(() => window.location.assign('/'))}>退出</Button>}
-    </div>
-  )
-}
 
 const theme = {
   token: {
@@ -81,7 +58,7 @@ export default function App() {
   return (
     <ConfigProvider locale={zhCN} theme={theme}>
       <BrowserRouter>
-        <AuthBar />
+        <AppNav />
         <Suspense fallback={<div className="page-shell"><Spin /></div>}>
           <Routes>
             <Route path="/login" element={<LoginPage />} />

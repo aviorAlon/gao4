@@ -164,3 +164,11 @@ def test_required_mode_rejects_anonymous_requests_but_keeps_register_and_login_o
     assert client.post('/api/auth/login', json={'username': 'alice', 'password': 'correct horse battery'}).status_code == 200
     assert client.post('/api/submissions', json=SUBMISSION, headers=_bearer(registered['token'])).status_code == 201
     assert client.get('/api/knowledge-partitions').status_code == 401
+
+
+def test_health_reports_whether_login_is_required(monkeypatch):
+    client = TestClient(app_module.app)
+    assert client.get('/api/health').json()['auth_required'] is False
+    monkeypatch.setattr(app_module, 'AUTH_REQUIRED', True)
+    body = client.get('/api/health')  # still public in required mode: the login page needs it before any token exists
+    assert body.status_code == 200 and body.json()['auth_required'] is True

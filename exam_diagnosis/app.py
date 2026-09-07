@@ -1771,7 +1771,7 @@ def system_status(user_id: str = Depends(current_user_id)):
 def health():
     """Liveness for whatever supervises this process (the desktop shell polls it after spawning
     the backend). Public: no auth, no user context."""
-    return {'status': 'ok', 'application': app.title, 'version': app.version, 'data_dir': str(paths.data_dir())}
+    return {'status': 'ok', 'application': app.title, 'version': app.version, 'data_dir': str(paths.data_dir()), 'auth_required': AUTH_REQUIRED}
 
 
 class SettingsIn(BaseModel):

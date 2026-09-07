@@ -109,6 +109,15 @@ PYTHONPATH=. pytest -q
 
 ## 桌面客户端（Tauri）
 
+**硬约束：任何功能都不能依赖浏览器提供的东西。** 桌面窗口里没有后退按钮、地址栏、下载管理器、新标签页，也没有 F5。具体落实：
+
+- 导航：每个页面顶部有全局导航条（返回 / 诊断台 / 知识库 / 系统状态 / 设置 / 当前身份），"返回"用应用内路由历史，没有历史就回首页；登录页在后端不强制登录时有"返回，不登录"和"不登录，直接使用"。
+- 下载：导出 PDF/Word/Markdown/HTML/YAML/JSON 全部走 `saveBlob()`——桌面端弹原生"另存为"（Tauri dialog 插件）再由 Rust 命令 `save_file` 写盘；浏览器里才用 `<a download>`。**不要再写 `<a href>` 直链到导出接口**：WebView 会把整个应用页面替换成响应内容且回不来，而且直链不带登录态。
+- 跳转：不用 `window.location.assign/reload`。会话失效由 axios 拦截器发 `exam-diagnosis:auth-lost` 事件，导航条监听后用路由跳到 `/login`；退出登录同样走路由。
+- 外部资源：`index.html` 引了 Google Fonts，离线时退化到系统字体，功能不受影响；除此之外不得依赖任何外网资源。
+- 新页面自检清单：能从导航条到达并返回？所有"下载/导出"用的是 `saveBlob`/`downloadFromApi`？没有 `window.location`/`window.open`/`target=_blank`？
+
+
 - `frontend/src-tauri/` 是 Tauri 2 的桌面壳：同一套 React 前端装进原生窗口（Windows 用系统自带的 WebView2），不是另写一份 UI。需要 Rust 工具链（`cargo`）和 `frontend` 目录下的 `npm install`。
 - 开发：`npm --prefix frontend run desktop:dev`（自动起 Vite 再开窗口）；打包：`npm --prefix frontend run desktop:build`，产物在 `frontend/src-tauri/target/release/`（exe 和安装包）。
 - **自带后端**：`python scripts/build_backend.py` 用 PyInstaller 把 API 后端冻结成 `frontend/src-tauri/resources/backend/`（onedir，约 100MB），并自动做一次冒烟测试——用冻结出来的程序真的跑一遍"建任务 → 确认 → 报告 → 导出 PDF/Word"，因为 PyInstaller 漏掉数据文件（python-docx 模板、PyMuPDF 原生库、知识库 YAML）时只会在运行期炸。之后 `desktop:build` 会把这个目录作为资源打进安装包。
