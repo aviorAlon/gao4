@@ -19,6 +19,8 @@ from .diagnosis import diagnose_records, model_grade_attempt
 from .storage import SQLiteMapping
 from .tasks import TaskQueue
 from .trends import build_trends
+from .wrong_book import BOOK_TITLE, build_wrong_book, wrong_book_blocks
+from .export import EXPORT_MEDIA_TYPES, render_blocks_docx, render_blocks_pdf
 from .review_plan import build_review_plan, initial_schedule, schedule_after_attempt
 from . import auth
 from .knowledge import KnowledgePartitionNotFound, available_partitions, find_partition
@@ -1852,3 +1854,49 @@ def review_plan(user_id: str = Depends(current_user_id), submission_id: str | No
         if existing is None or str(question.get('id', '')) > str(existing.get('id', '')):
             questions[key] = question
     return {'submission_id': submission_id, **build_review_plan(records, questions)}
+
+
+def _wrong_book_for(sid: str, knowledge_id=None, exam_id=None, root_cause=None):
+    """Shared by the JSON view and the printable exports so they can never disagree."""
+    exams = [item for item in EXAMS.values() if item['submission_id'] == sid]
+    records_by_exam: dict[str, list[dict]] = {exam['id']: [] for exam in exams}
+    for record in QUESTION_RECORDS.values():
+        if record['status'] == 'confirmed' and record['exam_id'] in records_by_exam:
+            records_by_exam[record['exam_id']].append(record)
+    try:
+        for records in records_by_exam.values():
+            for record in records:
+                if record.get('is_wrong_question') and not record.get('knowledge_points'):
+                    apply_knowledge_mapping(record)
+    except KnowledgePartitionNotFound:
+        pass  # the book is still worth showing without knowledge tags
+    reports = [run['report'] for run in RUNS.values() if run.get('submission_id') == sid and run.get('report')]
+    return build_wrong_book(exams, records_by_exam, reports, knowledge_id=knowledge_id, exam_id=exam_id, root_cause=root_cause)
+
+
+@app.get('/api/submissions/{sid}/wrong-questions')
+def wrong_question_book(sid: str, knowledge_id: str | None = None, exam_id: str | None = None, root_cause: str | None = None):
+    """Every mistake in this submission, filterable. Includes questions no report has analysed
+    yet — with empty diagnosis fields rather than omitted, so the book is the complete record."""
+    if sid not in SUBMISSIONS:
+        return JSONResponse({'error': 'submission_not_found'}, status_code=404)
+    return {'submission_id': sid, **_wrong_book_for(sid, knowledge_id, exam_id, root_cause)}
+
+
+@app.get('/api/submissions/{sid}/wrong-questions/export')
+def export_wrong_question_book(sid: str, format: str = 'pdf', edition: str = 'review', knowledge_id: str | None = None, exam_id: str | None = None, root_cause: str | None = None):
+    """Printable editions. `edition=practice` prints question stems and blank space only — seeing
+    last time's wrong answer while redoing a question is how you rehearse the mistake."""
+    submission = SUBMISSIONS.get(sid)
+    if not submission:
+        return JSONResponse({'error': 'submission_not_found'}, status_code=404)
+    if format not in EXPORT_MEDIA_TYPES:
+        return JSONResponse({'error': 'unsupported_format', 'supported': sorted(EXPORT_MEDIA_TYPES)}, status_code=422)
+    if edition not in ('review', 'practice'):
+        return JSONResponse({'error': 'unsupported_edition', 'supported': ['review', 'practice']}, status_code=422)
+    book = _wrong_book_for(sid, knowledge_id, exam_id, root_cause)
+    title = f"{BOOK_TITLE}· {submission.get('subject', '')}{'（练习版）' if edition == 'practice' else ''}"
+    blocks = wrong_book_blocks(book, practice=edition == 'practice', title=title)
+    content = render_blocks_pdf(blocks) if format == 'pdf' else render_blocks_docx(blocks)
+    filename = f'exam-diagnosis-wrong-book-{edition}-{sid[:8]}.{format}'
+    return Response(content, media_type=EXPORT_MEDIA_TYPES[format], headers={'Content-Disposition': f'attachment; filename="{filename}"'})

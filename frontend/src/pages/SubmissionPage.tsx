@@ -151,6 +151,11 @@ export default function SubmissionPage() {
         </Card>
       </SectionBlock>
 
+      <Flex gap="small" style={{ marginBottom: 16 }}>
+        <Link to={`/wrong-book/${submission.id}`}><Button>打开错题本</Button></Link>
+        <Link to="/review"><Button>复习计划</Button></Link>
+      </Flex>
+
       <TrendsSection submissionId={submission.id} />
 
       <SectionBlock marker="neutral" title="历史报告">

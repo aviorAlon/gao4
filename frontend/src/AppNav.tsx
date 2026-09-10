@@ -10,6 +10,7 @@ const { Text } = Typography
 const NAV = [
   { to: '/', label: '诊断台' },
   { to: '/review', label: '复习' },
+  { to: '/wrong-book', label: '错题本' },
   { to: '/knowledge', label: '知识库' },
   { to: '/status', label: '系统状态' },
   { to: '/settings', label: '设置' },

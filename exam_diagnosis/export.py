@@ -103,9 +103,13 @@ def blocks_to_html(blocks: list[Block]) -> str:
 
 
 def render_pdf(report: dict[str, Any]) -> bytes:
+    return render_blocks_pdf(report_blocks(report))
+
+
+def render_blocks_pdf(blocks: list[Block]) -> bytes:
     import pymupdf
 
-    html = blocks_to_html(report_blocks(report))
+    html = blocks_to_html(blocks)
     buffer = io.BytesIO()
     writer = pymupdf.DocumentWriter(buffer)
     story = pymupdf.Story(html=html, user_css=PDF_CSS)
@@ -145,6 +149,10 @@ DOCX_EAST_ASIAN_FONT = '宋体'
 
 
 def render_docx(report: dict[str, Any]) -> bytes:
+    return render_blocks_docx(report_blocks(report))
+
+
+def render_blocks_docx(blocks: list[Block]) -> bytes:
     from docx import Document
     from docx.oxml.ns import qn
 
@@ -154,7 +162,7 @@ def render_docx(report: dict[str, Any]) -> bytes:
     for style_name in ('Normal', 'Heading 1', 'Heading 2', 'Heading 3', 'List Bullet', 'List Bullet 2', 'List Number'):
         rpr = document.styles[style_name].element.get_or_add_rPr()
         rpr.get_or_add_rFonts().set(qn('w:eastAsia'), DOCX_EAST_ASIAN_FONT)
-    for block in report_blocks(report):
+    for block in blocks:
         kind = block[0]
         if kind == 'heading':
             document.add_heading(block[2], level=block[1])

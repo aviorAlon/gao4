@@ -409,6 +409,62 @@ export async function fetchTrends(submissionId: string): Promise<SubmissionTrend
   return data
 }
 
+// --- Wrong-question book ---
+
+export interface WrongBookItem {
+  question_id: string
+  exam_id: string
+  exam_name: string
+  exam_date: string | null
+  question_number: string
+  question_text: string
+  student_answer: string
+  teacher_comment: string
+  score: { obtained: number | null; total: number | null }
+  original_source: unknown
+  knowledge_points: Array<{ knowledge_id: string; name: string; chapter: string }>
+  root_cause: string
+  explanation: string
+  avoidance_advice: string
+  analysis_run_id: string | null
+  analysed: boolean
+}
+
+export interface WrongBookFilters { knowledge_id: string | null; exam_id: string | null; root_cause: string | null }
+
+export interface WrongBook {
+  submission_id: string
+  items: WrongBookItem[]
+  filters: WrongBookFilters
+  facets: {
+    exams: Array<{ exam_id: string; name: string; count: number }>
+    knowledge_points: Array<{ knowledge_id: string; name: string; chapter: string; count: number }>
+    root_causes: Array<{ root_cause: string; count: number }>
+  }
+  summary: { total: number; analysed: number; exam_count: number }
+}
+
+export async function fetchWrongBook(submissionId: string, filters: Partial<WrongBookFilters> = {}): Promise<WrongBook> {
+  const params = Object.fromEntries(Object.entries(filters).filter(([, v]) => v))
+  const { data } = await api.get<WrongBook>(`/api/submissions/${submissionId}/wrong-questions`, { params })
+  return data
+}
+
+/** Download a printable edition. `practice` prints stems and blank space only — see the backend
+ * note: seeing last time's wrong answer while redoing a question rehearses the mistake. */
+export async function downloadWrongBook(
+  submissionId: string,
+  options: { format: 'pdf' | 'docx'; edition: 'review' | 'practice' } & Partial<WrongBookFilters>,
+) {
+  const { format, edition, ...filters } = options
+  const query = new URLSearchParams({ format, edition })
+  for (const [key, value] of Object.entries(filters)) if (value) query.set(key, String(value))
+  return downloadFromApi(
+    `/api/submissions/${submissionId}/wrong-questions/export?${query}`,
+    `错题本-${edition === 'practice' ? '练习版' : '复习版'}-${submissionId.slice(0, 8)}.${format}`,
+  )
+}
+
 // --- Review plan (spaced repetition over mastery records) ---
 
 export interface ReviewItem {
