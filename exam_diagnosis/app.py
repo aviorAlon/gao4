@@ -18,6 +18,7 @@ from . import knowledge
 from .diagnosis import diagnose_records, model_grade_attempt
 from .storage import SQLiteMapping
 from .tasks import TaskQueue
+from .trends import build_trends
 from . import auth
 from .knowledge import KnowledgePartitionNotFound, available_partitions, find_partition
 from .review import APPROVED, NEEDS_REVIEW, review_report, withhold_unreviewed_answer
@@ -1802,3 +1803,29 @@ def update_settings(body: SettingsIn):
     app_settings.apply_config(config)
     _refresh_budget_from_env()
     return get_settings()
+
+
+@app.get('/api/submissions/{sid}/trends')
+def submission_trends(sid: str):
+    """How this student's exams compare over time. One report says what went wrong once; this
+    follows each knowledge point across every exam in the submission."""
+    submission = SUBMISSIONS.get(sid)
+    if not submission:
+        return JSONResponse({'error': 'submission_not_found'}, status_code=404)
+    exams = [item for item in EXAMS.values() if item['submission_id'] == sid]
+    records_by_exam: dict[str, list[dict]] = {exam['id']: [] for exam in exams}
+    for record in QUESTION_RECORDS.values():
+        if record['status'] == 'confirmed' and record['exam_id'] in records_by_exam:
+            records_by_exam[record['exam_id']].append(record)
+    # Knowledge points are mapped lazily (report generation does the same): a confirmed record
+    # has none until something asks. Cached on the record, so this costs at most one mapping per
+    # question no matter how often the trend is opened.
+    try:
+        for records in records_by_exam.values():
+            for record in records:
+                if not record.get('knowledge_points'):
+                    apply_knowledge_mapping(record)
+    except KnowledgePartitionNotFound as missing:
+        return JSONResponse({'error': 'knowledge_partition_not_found', 'requested': {'stage': missing.stage, 'subject': missing.subject, 'province': missing.province}}, status_code=422)
+    reports = [run['report'] for run in RUNS.values() if run.get('submission_id') == sid and run.get('report')]
+    return {'submission_id': sid, **build_trends(exams, records_by_exam, reports)}

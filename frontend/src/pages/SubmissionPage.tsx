@@ -7,6 +7,7 @@ import {
   listMasteryRecords, type AnalysisRunRef, type Exam, type MasteryRecord, type Submission,
 } from '../api'
 import { Masthead, SectionBlock, Vital, VitalsStrip } from '../chart/Chart'
+import TrendsSection from '../components/TrendsSection'
 import '../chart/chart.css'
 
 const EXAM_STATUS_LABEL: Record<string, string> = {
@@ -149,6 +150,8 @@ export default function SubmissionPage() {
           </Flex>
         </Card>
       </SectionBlock>
+
+      <TrendsSection submissionId={submission.id} />
 
       <SectionBlock marker="neutral" title="历史报告">
         <Card>

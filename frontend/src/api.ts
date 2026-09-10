@@ -341,6 +341,74 @@ export async function listTasks(limit = 50): Promise<{ tasks: TaskRecord[]; work
   return data
 }
 
+// --- Trends (longitudinal view across a submission's exams) ---
+
+export type TrendDirection = 'improving' | 'worsening' | 'stable' | 'insufficient'
+
+export interface TrendExamPoint {
+  exam_id: string
+  name: string
+  sequence_no: number | null
+  exam_date: string | null
+  exam_type: string | null
+  version: number
+  question_count: number
+  wrong_count: number
+  error_rate: number
+  root_cause_counts: Record<string, number>
+  analysed: boolean
+}
+
+export interface TrendSeriesPoint {
+  exam_id: string
+  name: string
+  question_count: number
+  wrong_count: number
+  error_rate: number
+}
+
+export interface KnowledgeTrend {
+  knowledge_id: string
+  name: string
+  chapter: string
+  points: TrendSeriesPoint[]
+  exam_count: number
+  total_question_count: number
+  total_wrong_count: number
+  first_error_rate: number
+  last_error_rate: number
+  delta: number | null
+  direction: TrendDirection
+  persistent: boolean
+}
+
+export interface SubmissionTrends {
+  submission_id: string
+  exams: TrendExamPoint[]
+  knowledge_trends: KnowledgeTrend[]
+  summary: {
+    exam_count: number
+    exams_with_questions: number
+    analysed_exam_count: number
+    total_question_count: number
+    total_wrong_count: number
+    first_error_rate: number | null
+    last_error_rate: number | null
+    overall_delta: number | null
+    overall_direction: TrendDirection
+    improving: string[]
+    worsening: string[]
+    persistent: string[]
+    root_cause_counts: Record<string, number>
+  }
+  note: string
+}
+
+export async function fetchTrends(submissionId: string): Promise<SubmissionTrends> {
+  const { data } = await api.get<SubmissionTrends>(`/api/submissions/${submissionId}/trends`)
+  return data
+}
+
 // --- Runtime settings (model keys / budget, stored in <data_dir>/config.json) ---
 
 export type SettingSource = 'env' | 'config' | null
