@@ -42,11 +42,13 @@ HIDDEN_IMPORTS = [
     'uvicorn.lifespan', 'uvicorn.lifespan.on', 'uvicorn.lifespan.off',
     'multipart', 'python_multipart', 'anyio._backends._asyncio',
     'exam_diagnosis.export',
+    # QR generation for phone upload picks its image factory by string at call time.
+    'qrcode.image.svg',
 ]
 # Packages whose non-Python files must travel with the code: python-docx's default .docx
 # template, fontTools' data tables, PyMuPDF's native library (its own hook handles the .pyd;
 # collecting the package is belt and braces).
-COLLECT_DATA = ['docx', 'fontTools']
+COLLECT_DATA = ['docx', 'fontTools', 'qrcode']
 COLLECT_ALL = ['pymupdf']
 
 

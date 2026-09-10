@@ -19,6 +19,8 @@ from .diagnosis import diagnose_records, model_grade_attempt
 from .storage import SQLiteMapping
 from .tasks import TaskQueue
 from .trends import build_trends
+from . import mobile
+from .lan_listener import LanListener
 from .transfer import BundleError, MAX_BUNDLE_BYTES, bundle_asset_name, build_bundle, prepare_import, read_bundle
 from .wrong_book import BOOK_TITLE, build_wrong_book, wrong_book_blocks
 from .export import EXPORT_MEDIA_TYPES, render_blocks_docx, render_blocks_pdf
@@ -62,6 +64,9 @@ USER_HEADER = 'X-User-Id'
 AUTH_REQUIRED = os.getenv('EXAM_DIAGNOSIS_AUTH_REQUIRED', '').strip().lower() in ('1', 'true', 'yes', 'on')
 SESSION_TTL_HOURS = float(os.getenv('EXAM_DIAGNOSIS_SESSION_TTL_HOURS') or 24 * 30)
 PUBLIC_PATHS = frozenset({'/api/auth/register', '/api/auth/login', '/api/health'})
+# Phone-upload routes carry their own scoped token instead of a user session; they are
+# checked in the handlers, not by enforce_resource_owner.
+PUBLIC_PATH_PREFIXES = (mobile.MOBILE_PATH_PREFIX, mobile.MOBILE_API_PREFIX)
 LOGIN_THROTTLE = auth.LoginThrottle()
 
 
@@ -104,8 +109,9 @@ TASKS = SQLiteMapping('tasks')
 USERS = SQLiteMapping('users')
 AUTH_SESSIONS = SQLiteMapping('auth_sessions')
 USER_KNOWLEDGE = SQLiteMapping('user_knowledge')
+MOBILE_SESSIONS = SQLiteMapping('mobile_sessions')
 
-_PERSISTENT_MAPPINGS = (SUBMISSIONS, EXAMS, ASSETS, RUNS, UPLOAD_SESSIONS, JOBS, PAGES, QUESTION_RECORDS, VERIFICATION_QUESTIONS, MASTERY_RECORDS, MODEL_CALLS, TASKS, USERS, AUTH_SESSIONS, USER_KNOWLEDGE)
+_PERSISTENT_MAPPINGS = (SUBMISSIONS, EXAMS, ASSETS, RUNS, UPLOAD_SESSIONS, JOBS, PAGES, QUESTION_RECORDS, VERIFICATION_QUESTIONS, MASTERY_RECORDS, MODEL_CALLS, TASKS, USERS, AUTH_SESSIONS, USER_KNOWLEDGE, MOBILE_SESSIONS)
 
 # The knowledge registry resolves "public partition, overlaid by this user's own" — it gets the
 # user's records from here so knowledge.py needn't know about SQLite.
@@ -245,7 +251,7 @@ OWNED_BY_PATH_PARAM = {
 def enforce_resource_owner(request: Request):
     """One chokepoint for the isolation boundary, so no route can forget to check it. Also where
     authentication is enforced: register/login are the only routes reachable without one."""
-    if request.url.path in PUBLIC_PATHS:
+    if request.url.path in PUBLIC_PATHS or request.url.path.startswith(PUBLIC_PATH_PREFIXES):
         return
     user_id = resolve_user_id(request)
     for name, value in request.path_params.items():
@@ -538,6 +544,42 @@ def create_upload_session(eid: str):
     UPLOAD_SESSIONS[session_id] = item
     return item
 
+ALLOWED_UPLOAD_TYPES = {'image/jpeg', 'image/png', 'image/webp', 'application/pdf', 'text/plain'}
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+
+
+def store_exam_asset(exam_id: str, user_id: str, file: UploadFile, upload_session_id: str | None = None):
+    """Validate and persist one uploaded file for an exam. Returns the asset record, or a
+    JSONResponse describing why it was refused. Shared by the desktop upload session and the
+    phone-upload channel so both enforce exactly the same limits, types and dedup rule."""
+    filename = Path(file.filename or '').name
+    if not filename:
+        return JSONResponse({'error': 'empty_filename'}, status_code=422)
+    if file.content_type not in ALLOWED_UPLOAD_TYPES:
+        return JSONResponse({'error': 'unsupported_media_type', 'allowed': sorted(ALLOWED_UPLOAD_TYPES)}, status_code=415)
+    content = file.file.read(MAX_UPLOAD_BYTES + 1)
+    if len(content) > MAX_UPLOAD_BYTES:
+        return JSONResponse({'error': 'file_too_large', 'max_bytes': MAX_UPLOAD_BYTES}, status_code=413)
+    digest = hashlib.sha256(content).hexdigest()
+    duplicate = next((asset for asset in ASSETS.values() if asset['exam_id'] == exam_id and asset.get('sha256') == digest), None)
+    if duplicate:
+        return JSONResponse({'error': 'duplicate_asset', 'duplicate_asset_id': duplicate['id'], 'duplicate_filename': duplicate['filename'], 'sha256': digest}, status_code=409)
+    aid = str(uuid4())
+    data = paths.uploads_dir() / exam_id / (upload_session_id or 'mobile')
+    data.mkdir(parents=True, exist_ok=True)
+    path = data / filename
+    path.write_bytes(content)
+    item = {
+        'id': aid, 'exam_id': exam_id, 'upload_session_id': upload_session_id,
+        'user_id': user_id,
+        'filename': filename, 'storage_path': str(path),
+        'media_type': file.content_type, 'page_order': len(assets_for_exam(exam_id)) + 1,
+        'material_type': 'unknown', 'ocr_status': 'pending', 'status': 'received', 'sha256': digest,
+    }
+    ASSETS[aid] = item
+    return item
+
+
 @app.post('/api/upload-sessions/{session_id}/assets', status_code=201)
 def upload_session_asset(session_id: str, file: UploadFile = File(...)):
     session = UPLOAD_SESSIONS.get(session_id)
@@ -545,34 +587,10 @@ def upload_session_asset(session_id: str, file: UploadFile = File(...)):
         return JSONResponse({'error': 'upload_session_not_found'}, status_code=404)
     if session['status'] != 'uploading':
         return JSONResponse({'error': 'upload_session_not_open'}, status_code=409)
-    filename = Path(file.filename or '').name
-    if not filename:
-        return JSONResponse({'error': 'empty_filename'}, status_code=422)
-    allowed = {'image/jpeg', 'image/png', 'image/webp', 'application/pdf', 'text/plain'}
-    if file.content_type not in allowed:
-        return JSONResponse({'error': 'unsupported_media_type', 'allowed': sorted(allowed)}, status_code=415)
-    content = file.file.read(10 * 1024 * 1024 + 1)
-    if len(content) > 10 * 1024 * 1024:
-        return JSONResponse({'error': 'file_too_large', 'max_bytes': 10 * 1024 * 1024}, status_code=413)
-    digest = hashlib.sha256(content).hexdigest()
-    duplicate = next((asset for asset in ASSETS.values() if asset['exam_id'] == session['exam_id'] and asset.get('sha256') == digest), None)
-    if duplicate:
-        return JSONResponse({'error': 'duplicate_asset', 'duplicate_asset_id': duplicate['id'], 'duplicate_filename': duplicate['filename'], 'sha256': digest}, status_code=409)
-    exam_id = session['exam_id']
-    aid = str(uuid4())
-    data = paths.uploads_dir() / exam_id / session_id
-    data.mkdir(parents=True, exist_ok=True)
-    path = data / filename
-    path.write_bytes(content)
-    item = {
-        'id': aid, 'exam_id': exam_id, 'upload_session_id': session_id,
-        'user_id': session.get('user_id', LOCAL_USER_ID),
-        'filename': filename, 'storage_path': str(path),
-        'media_type': file.content_type, 'page_order': len(session['asset_ids']) + 1,
-        'material_type': 'unknown', 'ocr_status': 'pending', 'status': 'received', 'sha256': digest,
-    }
-    ASSETS[aid] = item
-    session['asset_ids'].append(aid)
+    item = store_exam_asset(session['exam_id'], session.get('user_id', LOCAL_USER_ID), file, session_id)
+    if isinstance(item, JSONResponse):
+        return item
+    session['asset_ids'].append(item['id'])
     UPLOAD_SESSIONS[session_id] = session
     return item
 
@@ -1980,3 +1998,134 @@ def import_submission(file: UploadFile = File(...), user_id: str = Depends(curre
         'missing_files': missing,
         'source_versions': payload.get('versions', {}),
     }
+
+
+# --- Phone upload over the LAN ----------------------------------------------------------------------
+
+LAN_LISTENER = LanListener(app)
+
+
+@app.middleware('http')
+async def restrict_lan_listener(request: Request, call_next):
+    """Requests that came in on the phone-upload listener may only reach the phone-upload surface.
+
+    Even while that listener is open, the rest of the API is not exposed to the network. Keyed on
+    the accepting socket's port rather than the client address, so a web deployment deliberately
+    bound to 0.0.0.0 by its operator is unaffected (see mobile.is_lan_request).
+    """
+    if mobile.is_lan_request(request.scope, LAN_LISTENER.port) and not mobile.path_allowed_from_lan(request.url.path):
+        return JSONResponse({'error': 'not_available_over_lan'}, status_code=403)
+    return await call_next(request)
+
+
+def _open_mobile_sessions() -> list[dict]:
+    return [item for item in MOBILE_SESSIONS.values() if mobile.session_is_open(item)]
+
+
+def _close_mobile_session(session: dict) -> None:
+    session['closed'] = True
+    session['closed_at'] = datetime.utcnow().isoformat() + 'Z'
+    MOBILE_SESSIONS[session['id']] = session
+    # The listener exists only for live sessions; the last one out turns off the light.
+    if not _open_mobile_sessions():
+        LAN_LISTENER.stop()
+
+
+def _mobile_session_view(session: dict, token: str | None = None) -> dict:
+    view = {
+        'exam_id': session['exam_id'], 'created_at': session['created_at'], 'expires_at': session['expires_at'],
+        'closed': bool(session.get('closed')), 'upload_count': session.get('upload_count', 0),
+        'listener': LAN_LISTENER.describe(), 'security_note': mobile.SECURITY_NOTE,
+    }
+    if token:
+        addresses = mobile.lan_addresses()
+        urls = mobile.upload_urls(LAN_LISTENER.port, token, addresses) if LAN_LISTENER.port else []
+        view.update({'urls': urls, 'addresses': addresses, 'qr_svg': mobile.qr_svg(urls[0]) if urls else None})
+    return view
+
+
+@app.post('/api/exams/{eid}/mobile-upload', status_code=201)
+def start_mobile_upload(eid: str, minutes: float = mobile.DEFAULT_TTL_MINUTES):
+    """Open a phone-upload channel for this exam: starts the LAN listener and mints a scoped,
+    expiring token. The token can add files to this exam and do nothing else."""
+    exam = EXAMS.get(eid)
+    if not exam:
+        return JSONResponse({'error': 'exam_not_found'}, status_code=404)
+    if exam['status'] == 'confirmed':
+        return JSONResponse({'error': 'exam_confirmed', 'hint': 'reopen the exam before adding material'}, status_code=409)
+    if LAN_LISTENER.start() is None:
+        return JSONResponse({'error': 'lan_listener_unavailable', 'detail': LAN_LISTENER.error}, status_code=503)
+    token = mobile.new_token()
+    session = {
+        'id': mobile.token_key(token), 'exam_id': eid, 'user_id': exam.get('user_id', LOCAL_USER_ID),
+        'created_at': datetime.utcnow().isoformat() + 'Z', 'expires_at': mobile.expiry(minutes),
+        'closed': False, 'upload_count': 0,
+    }
+    MOBILE_SESSIONS[session['id']] = session
+    return _mobile_session_view(session, token)
+
+
+@app.get('/api/exams/{eid}/mobile-upload')
+def mobile_upload_status(eid: str):
+    """Whether a channel is open for this exam, and how much has come in — the desktop polls this
+    so newly photographed pages appear without the user doing anything."""
+    if eid not in EXAMS:
+        return JSONResponse({'error': 'exam_not_found'}, status_code=404)
+    session = next((item for item in _open_mobile_sessions() if item['exam_id'] == eid), None)
+    if session is None:
+        return {'open': False, 'listener': LAN_LISTENER.describe()}
+    return {'open': True, **_mobile_session_view(session)}
+
+
+@app.delete('/api/exams/{eid}/mobile-upload')
+def stop_mobile_upload(eid: str):
+    if eid not in EXAMS:
+        return JSONResponse({'error': 'exam_not_found'}, status_code=404)
+    closed = 0
+    for session in [item for item in _open_mobile_sessions() if item['exam_id'] == eid]:
+        _close_mobile_session(session)
+        closed += 1
+    return {'closed': closed, 'listener': LAN_LISTENER.describe()}
+
+
+def _session_for_token(token: str) -> dict | None:
+    session = MOBILE_SESSIONS.get(mobile.token_key(token))
+    return session if mobile.session_is_open(session) else None
+
+
+@app.get(mobile.MOBILE_PATH_PREFIX + '{token}', response_class=HTMLResponse)
+def mobile_upload_page(token: str):
+    """The page the phone opens. Served from the backend because in the desktop build there is no
+    web frontend for a phone to reach — see the module docstring in mobile.py."""
+    session = _session_for_token(token)
+    if session is None:
+        return HTMLResponse(mobile.expired_page('这个上传链接已经关闭或过期了。'), status_code=410)
+    exam = EXAMS.get(session['exam_id'])
+    return HTMLResponse(mobile.upload_page(token, (exam or {}).get('name', '考试'), session.get('upload_count', 0)))
+
+
+@app.post(mobile.MOBILE_API_PREFIX + '{token}/assets', status_code=201)
+def mobile_upload_asset(token: str, file: UploadFile = File(...)):
+    session = _session_for_token(token)
+    if session is None:
+        return JSONResponse({'error': 'mobile_session_closed', 'detail': '上传通道已关闭或过期'}, status_code=410)
+    if session['exam_id'] not in EXAMS:
+        return JSONResponse({'error': 'exam_not_found'}, status_code=404)
+    item = store_exam_asset(session['exam_id'], session['user_id'], file)
+    if isinstance(item, JSONResponse):
+        return item
+    session['upload_count'] = session.get('upload_count', 0) + 1
+    MOBILE_SESSIONS[session['id']] = session
+    # The phone's request may be the only thing happening; don't leave it sitting in the cache.
+    _flush_all_state()
+    return {'asset_id': item['id'], 'filename': item['filename'], 'upload_count': session['upload_count']}
+
+
+@app.delete(mobile.MOBILE_API_PREFIX + '{token}')
+def mobile_close_session(token: str):
+    session = _session_for_token(token)
+    if session is None:
+        return {'closed': False}
+    _close_mobile_session(session)
+    _flush_all_state()
+    return {'closed': True, 'upload_count': session.get('upload_count', 0)}

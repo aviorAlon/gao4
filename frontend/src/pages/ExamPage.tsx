@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams, Link } from 'react-router-dom'
 import {
-  Alert, Breadcrumb, Button, Card, Checkbox, Empty, Flex, Input, InputNumber, Popconfirm, Select, Spin,
+  Alert, Breadcrumb, Button, Card, Checkbox, Divider, Empty, Flex, Input, InputNumber, Popconfirm, Select, Spin,
   Steps, Table, Tag, Typography, Upload, message,
 } from 'antd'
 import type { UploadFile } from 'antd'
@@ -14,6 +14,7 @@ import {
   type Asset, type DraftQuestion, type Exam, type ExamPage as ExamPageData, type Job, type QuestionInput, type QuestionRecord,
 } from '../api'
 import { Masthead, RedPenMark, SectionBlock } from '../chart/Chart'
+import MobileUploadPanel from '../components/MobileUploadPanel'
 import '../chart/chart.css'
 
 const { Text } = Typography
@@ -47,6 +48,7 @@ function UploadStep({ examId, onDone }: { examId: string; onDone: () => void }) 
   const [jobId, setJobId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [progress, setProgress] = useState<string | null>(null)
+  const [phoneUploads, setPhoneUploads] = useState(0)
 
   function describeProgress(job: Job) {
     const running = job.stages.find((s) => s.status === 'running')
@@ -74,6 +76,22 @@ function UploadStep({ examId, onDone }: { examId: string; onDone: () => void }) 
       onDone()
     } catch (e: any) {
       setError(e?.response?.data?.error ?? e.message ?? '上传或解析失败')
+    } finally {
+      setBusy(false)
+      setProgress(null)
+    }
+  }
+
+  async function parsePhoneUploads() {
+    setBusy(true)
+    setError(null)
+    try {
+      const { job_id } = await reparseExam(examId)
+      await runJobInBackground(job_id, (job) => setProgress(describeProgress(job)))
+      message.success('解析完成')
+      onDone()
+    } catch (e: any) {
+      setError(e?.response?.data?.error ?? e.message ?? '解析失败')
     } finally {
       setBusy(false)
       setProgress(null)
@@ -122,6 +140,22 @@ function UploadStep({ examId, onDone }: { examId: string; onDone: () => void }) 
             上传全部并运行解析
           </Button>
           {progress && <Text type="secondary">{progress}</Text>}
+
+          <Divider style={{ margin: '4px 0' }}>或者</Divider>
+          {/* Deliberately not onDone: that reloads the exam and would unmount the panel, taking
+              the QR with it after the very first photo. Count them and let the user say when. */}
+          <MobileUploadPanel examId={examId} onUploaded={() => setPhoneUploads((n) => n + 1)} />
+          {phoneUploads > 0 && (
+            <Alert
+              type="success" showIcon
+              title={`手机已传来 ${phoneUploads} 份资料`}
+              description={
+                <Button size="small" type="primary" style={{ marginTop: 8 }} onClick={parsePhoneUploads} loading={busy}>
+                  传完了，开始解析
+                </Button>
+              }
+            />
+          )}
         </Flex>
       </Card>
     </SectionBlock>
@@ -339,6 +373,7 @@ function PagesAndDraft({ exam, onConfirmed }: { exam: Exam; onConfirmed: () => v
                 ) },
               ]}
             />
+            <MobileUploadPanel examId={exam.id} onUploaded={reloadMaterials} />
             <Flex align="center" gap="middle" wrap>
               <Button icon={<ReloadOutlined />} onClick={onReparse} loading={reparsing} disabled={!materialRows.length}>重新解析全部资料</Button>
               {reparseProgress && <Text type="secondary">{reparseProgress}</Text>}

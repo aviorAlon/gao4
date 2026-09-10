@@ -426,6 +426,39 @@ export async function fetchTrends(submissionId: string): Promise<SubmissionTrend
   return data
 }
 
+// --- Phone upload over the LAN ---
+
+export interface MobileUploadSession {
+  exam_id: string
+  created_at: string
+  expires_at: string
+  closed: boolean
+  upload_count: number
+  listener: { running: boolean; host: string; port: number | null; error: string | null }
+  security_note: string
+  /** Only returned when the channel is created — the token is handed out exactly once. */
+  urls?: string[]
+  addresses?: string[]
+  qr_svg?: string | null
+}
+
+export type MobileUploadStatus = { open: false; listener: MobileUploadSession['listener'] } | ({ open: true } & MobileUploadSession)
+
+export async function startMobileUpload(examId: string, minutes?: number): Promise<MobileUploadSession> {
+  const { data } = await api.post<MobileUploadSession>(`/api/exams/${examId}/mobile-upload`, null, { params: minutes ? { minutes } : undefined })
+  return data
+}
+
+export async function getMobileUploadStatus(examId: string): Promise<MobileUploadStatus> {
+  const { data } = await api.get<MobileUploadStatus>(`/api/exams/${examId}/mobile-upload`)
+  return data
+}
+
+export async function stopMobileUpload(examId: string): Promise<{ closed: number }> {
+  const { data } = await api.delete(`/api/exams/${examId}/mobile-upload`)
+  return data
+}
+
 // --- Backup: export a submission as a portable bundle, import it back ---
 
 export interface ImportResult {
