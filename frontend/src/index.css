@@ -83,3 +83,31 @@ body {
 .app-nav-brand { font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.12em; text-transform: uppercase; font-size: 12px; color: #1c1e21; margin-right: 6px; }
 .app-nav-link { color: #63666b; font-size: 13px; padding-bottom: 2px; border-bottom: 1.5px solid transparent; }
 .app-nav-link.is-active { color: #c7391f; border-bottom-color: #c7391f; }
+
+/* --- Narrow screens -------------------------------------------------------------------------
+   The app is used on a phone too (photographing a paper is a phone job — see the LAN upload
+   channel). These rules keep every page usable at ~375px without a separate mobile build:
+   nothing may push the page wider than the viewport, and anything genuinely wide (tables) gets
+   to scroll inside its own card instead. */
+@media (max-width: 720px) {
+  .page-shell { padding: 20px 12px 64px; }
+
+  .app-nav { padding: 8px 12px; gap: 8px; }
+  .app-nav-left, .app-nav-right { gap: 10px; }
+  .app-nav-brand { display: none; }        /* the strip is the brand at this size */
+  .app-nav-link { font-size: 13px; }
+
+  .masthead-title { font-size: 30px; line-height: 1.15; }
+  .masthead-meta { font-size: 13px; }
+
+  /* Wide content scrolls inside its container; the page itself never scrolls sideways. */
+  .ant-table-wrapper { overflow-x: auto; }
+  .ant-table-wrapper table { min-width: max-content; }
+
+  /* Inline forms have nowhere to go at this width — antd's own vertical layout is set in the
+     component (see HomePage); this catches any that slip through. */
+  .ant-form-inline .ant-form-item { margin-inline-end: 0; width: 100%; }
+
+  /* .vitals-strip is a wrapping flex row; a smaller floor lets two fit per line instead of one. */
+  .vital { min-width: 96px; padding: 12px 14px; }
+}

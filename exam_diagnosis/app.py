@@ -2088,7 +2088,10 @@ def stop_mobile_upload(eid: str):
     return {'closed': closed, 'listener': LAN_LISTENER.describe()}
 
 
-def _session_for_token(token: str) -> dict | None:
+def _mobile_session_for_token(token: str) -> dict | None:
+    """Named apart from the auth-session lookup above on purpose: an earlier revision called both
+    `_session_for_token`, and the later definition silently shadowed the first — every logged-in
+    user's bearer token started resolving against phone-upload sessions and came back 401."""
     session = MOBILE_SESSIONS.get(mobile.token_key(token))
     return session if mobile.session_is_open(session) else None
 
@@ -2097,7 +2100,7 @@ def _session_for_token(token: str) -> dict | None:
 def mobile_upload_page(token: str):
     """The page the phone opens. Served from the backend because in the desktop build there is no
     web frontend for a phone to reach — see the module docstring in mobile.py."""
-    session = _session_for_token(token)
+    session = _mobile_session_for_token(token)
     if session is None:
         return HTMLResponse(mobile.expired_page('这个上传链接已经关闭或过期了。'), status_code=410)
     exam = EXAMS.get(session['exam_id'])
@@ -2106,7 +2109,7 @@ def mobile_upload_page(token: str):
 
 @app.post(mobile.MOBILE_API_PREFIX + '{token}/assets', status_code=201)
 def mobile_upload_asset(token: str, file: UploadFile = File(...)):
-    session = _session_for_token(token)
+    session = _mobile_session_for_token(token)
     if session is None:
         return JSONResponse({'error': 'mobile_session_closed', 'detail': '上传通道已关闭或过期'}, status_code=410)
     if session['exam_id'] not in EXAMS:
@@ -2123,7 +2126,7 @@ def mobile_upload_asset(token: str, file: UploadFile = File(...)):
 
 @app.delete(mobile.MOBILE_API_PREFIX + '{token}')
 def mobile_close_session(token: str):
-    session = _session_for_token(token)
+    session = _mobile_session_for_token(token)
     if session is None:
         return {'closed': False}
     _close_mobile_session(session)

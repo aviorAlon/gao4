@@ -9,6 +9,7 @@ import {
   type KnowledgePartition, type Submission,
 } from '../api'
 import { Masthead, SectionBlock } from '../chart/Chart'
+import { useIsNarrow } from '../useIsNarrow'
 import '../chart/chart.css'
 
 const { Text } = Typography
@@ -17,6 +18,7 @@ const STAGE_LABEL: Record<string, string> = { primary: '小学', middle: '初中
 
 export default function HomePage() {
   const navigate = useNavigate()
+  const narrow = useIsNarrow()
   const [partitions, setPartitions] = useState<KnowledgePartition[]>([])
   const [submissions, setSubmissions] = useState<Submission[]>([])
   const [loading, setLoading] = useState(true)
@@ -108,10 +110,10 @@ export default function HomePage() {
 
       <SectionBlock marker="neutral" title="创建诊断任务">
         <Card>
-          <Form form={form} layout="inline" onFinish={onCreate} disabled={creating}>
+          <Form form={form} layout={narrow ? 'vertical' : 'inline'} onFinish={onCreate} disabled={creating}>
             <Form.Item name="partitionKey" label="知识库分区" rules={[{ required: true, message: '请选择知识库分区' }]}>
               <Select
-                style={{ minWidth: 260 }}
+                style={{ minWidth: narrow ? undefined : 260, width: narrow ? "100%" : undefined }}
                 placeholder="阶段 / 科目 / 省份"
                 options={partitions.map((p) => ({
                   value: partitionKey(p),
@@ -120,10 +122,10 @@ export default function HomePage() {
               />
             </Form.Item>
             <Form.Item name="school_grade" label="年级" rules={[{ required: true, message: '请选择年级' }]}>
-              <Select style={{ minWidth: 120 }} placeholder="年级" options={gradeOptions} disabled={!selectedPartition} />
+              <Select style={{ minWidth: narrow ? undefined : 120, width: narrow ? "100%" : undefined }} placeholder="年级" options={gradeOptions} disabled={!selectedPartition} />
             </Form.Item>
             <Form.Item name="academic_year_label" label="学年" rules={[{ required: true, message: '如 25-26' }]} initialValue="25-26">
-              <Select style={{ minWidth: 100 }} options={[{ value: '25-26', label: '25-26' }, { value: '26-27', label: '26-27' }]} />
+              <Select style={{ minWidth: narrow ? undefined : 100, width: narrow ? "100%" : undefined }} options={[{ value: '25-26', label: '25-26' }, { value: '26-27', label: '26-27' }]} />
             </Form.Item>
             <Form.Item>
               <Button type="primary" htmlType="submit" icon={<PlusOutlined />} loading={creating}>创建任务</Button>
