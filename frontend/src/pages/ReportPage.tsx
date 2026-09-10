@@ -2,14 +2,14 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
   Alert, Breadcrumb, Button, Card, Collapse, Descriptions, Divider, Empty, Flex, Input, InputNumber, Progress,
-  Result, Space, Spin, Table, Tag, Typography, Row, Col, message,
+  Result, Space, Spin, Table, Tag, Tooltip, Typography, Row, Col, message,
 } from 'antd'
 import {
   BulbOutlined, CheckCircleOutlined, DownloadOutlined, ExclamationCircleOutlined,
 } from '@ant-design/icons'
 import {
   downloadFromApi, loadReport, listMasteryRecords, listVerificationQuestions, reviewVerificationQuestion,
-  submitVerificationAttempt, type AnalysisReport, type MasteryRecord, type ReviewOrderItem,
+  submitVerificationAttempt, type AnalysisReport, type MasteryRecord, type MatchedKnowledgePoint, type ReviewOrderItem,
   type VerificationQuestionEntity, type WrongQuestion,
 } from '../api'
 import { Masthead, RedPenMark, SectionBlock, Vital, VitalsStrip } from '../chart/Chart'
@@ -200,6 +200,40 @@ function ReviewOrderCard({ items }: { items: ReviewOrderItem[] }) {
   )
 }
 
+const MATCH_METHOD: Record<string, { label: string; color?: string; hint: string }> = {
+  keyword: { label: '关键词命中', hint: '题干里出现了这个知识点的关键词' },
+  model: { label: '模型判断', color: 'blue', hint: '题干没有出现关键词，是 match 模型按语义判断的' },
+  'keyword+model': { label: '关键词 + 模型', color: 'green', hint: '关键词命中，模型也认同' },
+}
+
+/** The evidence behind a knowledge tag. "题干里写着定义域" and "模型觉得这题考定义域" are very
+ * different claims, and the reader deserves to see which one they're looking at. */
+function KnowledgeTags({ points }: { points: MatchedKnowledgePoint[] }) {
+  if (!points?.length) return <Text type="secondary">没有匹配到知识点</Text>
+  return (
+    <Space wrap size={4}>
+      {points.map((point) => {
+        const method = MATCH_METHOD[point.match_method] ?? { label: point.match_method, hint: '' }
+        const detail = [
+          method.hint,
+          point.matched_keywords?.length ? `命中关键词：${point.matched_keywords.join('、')}` : '',
+          point.knowledge_base_source === 'user' || point.source === 'user_knowledge_base' ? '来自你自己的知识库' : '来自公共知识库',
+          point.model_confidence != null ? `模型把握 ${point.model_confidence}` : '',
+        ].filter(Boolean).join(' · ')
+        return (
+          <Tooltip key={point.knowledge_id} title={detail}>
+            <Tag color={method.color}>
+              {point.name}
+              <Text type="secondary" style={{ fontSize: 11, marginLeft: 4 }}>{method.label}</Text>
+              {(point.knowledge_base_source === 'user' || point.source === 'user_knowledge_base') && <Text type="secondary" style={{ fontSize: 11, marginLeft: 4 }}>· 自定义</Text>}
+            </Tag>
+          </Tooltip>
+        )
+      })}
+    </Space>
+  )
+}
+
 function WrongQuestionsCard({ items }: { items: WrongQuestion[] }) {
   const body = !items.length ? (
     <Card><Empty description="暂无错题" /></Card>
@@ -212,6 +246,7 @@ function WrongQuestionsCard({ items }: { items: WrongQuestion[] }) {
             <Flex vertical gap={4} style={{ flex: 1 }}>
               <Text>{q.question_text || '（题干未记录）'}</Text>
               {q.student_answer && <Text type="secondary">学生作答：{q.student_answer}</Text>}
+              <KnowledgeTags points={q.knowledge_points} />
               <Space wrap>
                 <Tag color="red">{q.root_cause}</Tag>
                 {q.explanation && <Text type="secondary">{q.explanation}</Text>}

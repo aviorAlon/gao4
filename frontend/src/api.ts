@@ -208,12 +208,29 @@ export interface VerificationQuestion {
   withheld_reason?: string[]
 }
 
+/** How a question got tied to a knowledge point — the backend distinguishes a literal keyword
+ * hit from the `match` model's semantic judgement, and the public registry from the user's own
+ * knowledge base. Showing it lets the reader tell "the question literally says 定义域" from "a
+ * model judged this to be about 定义域" — very different levels of evidence. */
+export interface MatchedKnowledgePoint {
+  knowledge_id: string
+  name: string
+  chapter: string
+  confidence: number
+  matched_keywords: string[]
+  match_method: 'keyword' | 'model' | 'keyword+model' | string
+  model_confidence?: number
+  source: 'public_registry' | 'user_knowledge_base' | string
+  knowledge_base_source?: 'public' | 'user' | string
+  knowledge_base_version?: string
+}
+
 export interface WrongQuestion {
   question_id: string
   question_text: string
   student_answer: string
   original_source: unknown
-  knowledge_points: unknown[]
+  knowledge_points: MatchedKnowledgePoint[]
   root_cause: string
   avoidance_advice: string
   explanation?: string
