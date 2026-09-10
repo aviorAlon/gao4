@@ -409,6 +409,52 @@ export async function fetchTrends(submissionId: string): Promise<SubmissionTrend
   return data
 }
 
+// --- Review plan (spaced repetition over mastery records) ---
+
+export interface ReviewItem {
+  mastery_id: string
+  submission_id: string
+  knowledge_id: string
+  error_cluster: string
+  status: string
+  review_stage: number
+  interval_days: number | null
+  due_at: string | null
+  last_reviewed_at: string | null
+  attempt_count: number
+  days_until_due: number | null
+  overdue_days: number
+  verification_question_id: string | null
+  analysis_run_id: string | null
+  question_text: string | null
+}
+
+export interface ReviewPlan {
+  submission_id: string | null
+  due: ReviewItem[]
+  upcoming: ReviewItem[]
+  completed: ReviewItem[]
+  summary: {
+    due_count: number
+    overdue_count: number
+    upcoming_count: number
+    completed_count: number
+    next_due_at: string | null
+  }
+  intervals_days: number[]
+  note: string
+}
+
+export async function fetchReviewPlan(submissionId?: string): Promise<ReviewPlan> {
+  const { data } = await api.get<ReviewPlan>('/api/review-plan', { params: submissionId ? { submission_id: submissionId } : undefined })
+  return data
+}
+
+export async function getVerificationQuestion(questionId: string): Promise<VerificationQuestionEntity> {
+  const { data } = await api.get<VerificationQuestionEntity>(`/api/verification-questions/${questionId}`)
+  return data
+}
+
 // --- Runtime settings (model keys / budget, stored in <data_dir>/config.json) ---
 
 export type SettingSource = 'env' | 'config' | null

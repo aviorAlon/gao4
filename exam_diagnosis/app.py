@@ -19,6 +19,7 @@ from .diagnosis import diagnose_records, model_grade_attempt
 from .storage import SQLiteMapping
 from .tasks import TaskQueue
 from .trends import build_trends
+from .review_plan import build_review_plan, initial_schedule, schedule_after_attempt
 from . import auth
 from .knowledge import KnowledgePartitionNotFound, available_partitions, find_partition
 from .review import APPROVED, NEEDS_REVIEW, review_report, withhold_unreviewed_answer
@@ -1273,7 +1274,7 @@ def _generate_report(rid: str, run: dict, submission: dict, partition, selected:
         VERIFICATION_QUESTIONS[vid] = entity
         mastery_id = f"{run['submission_id']}:{generated['knowledge_id']}:{generated['target_error']}"
         if mastery_id not in MASTERY_RECORDS:
-            MASTERY_RECORDS[mastery_id] = {'id': mastery_id, 'submission_id': run['submission_id'], 'user_id': run.get('user_id', LOCAL_USER_ID), 'knowledge_id': generated['knowledge_id'], 'error_cluster': generated['target_error'], 'status': 'not_started', 'attempt_history': []}
+            MASTERY_RECORDS[mastery_id] = {'id': mastery_id, 'submission_id': run['submission_id'], 'user_id': run.get('user_id', LOCAL_USER_ID), 'knowledge_id': generated['knowledge_id'], 'error_cluster': generated['target_error'], 'status': 'not_started', 'attempt_history': [], **initial_schedule()}
         verification_ids.append(vid)
     report['verification_question_ids'] = verification_ids
     report['verification_questions'] = [withhold_unreviewed_answer(item) for item in report['verification_questions']]
@@ -1358,6 +1359,7 @@ def submit_verification_attempt(question_id: str, body: VerificationAttemptIn):
         mastery['status'] = 'resolved'
     else:
         mastery['status'] = 'provisionally_resolved'
+    schedule_after_attempt(mastery, attempt['passed'])
     MASTERY_RECORDS[mastery_id] = mastery
     return attempt
 
@@ -1829,3 +1831,24 @@ def submission_trends(sid: str):
         return JSONResponse({'error': 'knowledge_partition_not_found', 'requested': {'stage': missing.stage, 'subject': missing.subject, 'province': missing.province}}, status_code=422)
     reports = [run['report'] for run in RUNS.values() if run.get('submission_id') == sid and run.get('report')]
     return {'submission_id': sid, **build_trends(exams, records_by_exam, reports)}
+
+
+@app.get('/api/review-plan')
+def review_plan(user_id: str = Depends(current_user_id), submission_id: str | None = None):
+    """What to practise now, what's coming, and what's consolidated — the spaced-repetition view
+    over mastery records. Without `submission_id` it spans every submission this user owns, which
+    is the "今天该做什么" question; with one it narrows to that student's plan."""
+    records = [
+        item for item in MASTERY_RECORDS.values()
+        if item.get('user_id', LOCAL_USER_ID) == user_id and (not submission_id or item.get('submission_id') == submission_id)
+    ]
+    questions: dict[tuple, dict] = {}
+    for question in VERIFICATION_QUESTIONS.values():
+        if question.get('user_id', LOCAL_USER_ID) != user_id:
+            continue
+        key = (question.get('submission_id'), question.get('knowledge_id'))
+        # Newest question wins: a later analysis run produces a fresher variant for the same point.
+        existing = questions.get(key)
+        if existing is None or str(question.get('id', '')) > str(existing.get('id', '')):
+            questions[key] = question
+    return {'submission_id': submission_id, **build_review_plan(records, questions)}

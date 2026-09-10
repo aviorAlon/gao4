@@ -13,6 +13,7 @@ const ReportPage = lazy(() => import('./pages/ReportPage'))
 const LoginPage = lazy(() => import('./pages/LoginPage'))
 const KnowledgePage = lazy(() => import('./pages/KnowledgePage'))
 const StatusPage = lazy(() => import('./pages/StatusPage'))
+const ReviewPage = lazy(() => import('./pages/ReviewPage'))
 const SettingsPage = lazy(() => import('./pages/SettingsPage'))
 
 const theme = {
@@ -64,6 +65,7 @@ export default function App() {
             <Route path="/login" element={<LoginPage />} />
             <Route path="/knowledge" element={<KnowledgePage />} />
             <Route path="/status" element={<StatusPage />} />
+            <Route path="/review" element={<ReviewPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/" element={<HomePage />} />
             <Route path="/submissions/:id" element={<SubmissionPage />} />
