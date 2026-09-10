@@ -409,6 +409,29 @@ export async function fetchTrends(submissionId: string): Promise<SubmissionTrend
   return data
 }
 
+// --- Backup: export a submission as a portable bundle, import it back ---
+
+export interface ImportResult {
+  submission_id: string
+  imported: Record<string, number>
+  restored_files: number
+  missing_files: string[]
+  source_versions: Record<string, unknown>
+}
+
+/** The zip carries the uploaded files as well as the metadata — this is the one that actually
+ * moves a student's work to another machine. The JSON export stays available for inspection. */
+export async function downloadSubmissionBackup(submissionId: string) {
+  return downloadFromApi(`/api/submissions/${submissionId}/export?format=zip`, `exam-diagnosis-backup-${submissionId.slice(0, 8)}.zip`)
+}
+
+export async function importSubmission(file: File): Promise<ImportResult> {
+  const form = new FormData()
+  form.append('file', file)
+  const { data } = await api.post<ImportResult>('/api/submissions/import', form)
+  return data
+}
+
 // --- Wrong-question book ---
 
 export interface WrongBookItem {

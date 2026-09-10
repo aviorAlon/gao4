@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams, Link } from 'react-router-dom'
-import { Breadcrumb, Button, Card, Empty, Flex, Input, Spin, Table, Tag, message } from 'antd'
+import { Breadcrumb, Button, Card, Empty, Flex, Input, Space, Spin, Table, Tag, message } from 'antd'
 import { PlusOutlined, DownloadOutlined } from '@ant-design/icons'
 import {
-  createExam, downloadSubmissionExport, getSubmission, listAnalysisRuns, listExams,
+  createExam, downloadSubmissionBackup, downloadSubmissionExport, getSubmission, listAnalysisRuns, listExams,
   listMasteryRecords, type AnalysisRunRef, type Exam, type MasteryRecord, type Submission,
 } from '../api'
 import { Masthead, SectionBlock, Vital, VitalsStrip } from '../chart/Chart'
@@ -40,6 +40,7 @@ export default function SubmissionPage() {
   const [examName, setExamName] = useState('')
   const [creating, setCreating] = useState(false)
   const [exporting, setExporting] = useState(false)
+  const [backingUp, setBackingUp] = useState(false)
 
   async function reload() {
     setLoading(true)
@@ -69,6 +70,17 @@ export default function SubmissionPage() {
       message.error(e?.response?.data?.error ?? '创建失败')
     } finally {
       setCreating(false)
+    }
+  }
+
+  async function onBackup() {
+    setBackingUp(true)
+    try {
+      await downloadSubmissionBackup(id!)
+    } catch (e: any) {
+      message.error(e?.response?.data?.error ?? e.message ?? '备份失败')
+    } finally {
+      setBackingUp(false)
     }
   }
 
@@ -200,9 +212,14 @@ export default function SubmissionPage() {
         </Card>
       </SectionBlock>
 
-      <Button icon={<DownloadOutlined />} onClick={onExport} loading={exporting}>
-        导出个人数据（JSON）
-      </Button>
+      <Space wrap>
+        <Button type="primary" icon={<DownloadOutlined />} onClick={onBackup} loading={backingUp}>
+          导出完整备份（含上传的图片，可再导入）
+        </Button>
+        <Button icon={<DownloadOutlined />} onClick={onExport} loading={exporting}>
+          仅导出数据（JSON）
+        </Button>
+      </Space>
     </div>
   )
 }

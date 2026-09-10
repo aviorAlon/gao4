@@ -19,6 +19,7 @@ from .diagnosis import diagnose_records, model_grade_attempt
 from .storage import SQLiteMapping
 from .tasks import TaskQueue
 from .trends import build_trends
+from .transfer import BundleError, MAX_BUNDLE_BYTES, bundle_asset_name, build_bundle, prepare_import, read_bundle
 from .wrong_book import BOOK_TITLE, build_wrong_book, wrong_book_blocks
 from .export import EXPORT_MEDIA_TYPES, render_blocks_docx, render_blocks_pdf
 from .review_plan import build_review_plan, initial_schedule, schedule_after_attempt
@@ -418,14 +419,30 @@ def get_submission(sid: str):
     return item
 
 @app.get('/api/submissions/{sid}/export')
-def export_submission(sid: str):
+def export_submission(sid: str, format: str = 'json'):
+    """`json` is the metadata snapshot (unchanged); `zip` bundles it with the uploaded files so
+    the data can actually move to another machine and be imported back."""
     submission = SUBMISSIONS.get(sid)
     if not submission:
         return JSONResponse({'error': 'submission_not_found'}, status_code=404)
+    if format not in ('json', 'zip'):
+        return JSONResponse({'error': 'unsupported_format', 'supported': ['json', 'zip']}, status_code=422)
     exam_ids = [item['id'] for item in EXAMS.values() if item['submission_id'] == sid]
     partition = find_partition(submission['stage'], submission['subject'], submission['province'], submission.get('curriculum_year'), user_id=submission.get('user_id', LOCAL_USER_ID))
     knowledge_version = partition.version if partition else None
-    return {'submission': submission, 'knowledge_partition': partition.describe() if partition else None, 'exams': [EXAMS[eid] for eid in exam_ids], 'assets': [item for item in ASSETS.values() if item['exam_id'] in exam_ids], 'pages': [item for item in PAGES.values() if item['exam_id'] in exam_ids], 'question_records': [item for item in QUESTION_RECORDS.values() if item['exam_id'] in exam_ids], 'analysis_runs': [item for item in RUNS.values() if item['submission_id'] == sid], 'verification_questions': [item for item in VERIFICATION_QUESTIONS.values() if item['submission_id'] == sid], 'mastery_records': [item for item in MASTERY_RECORDS.values() if item['submission_id'] == sid], 'versions': {'export_schema': '1.0.0', 'knowledge_base': knowledge_version, 'application': app.version}}
+    payload = {'submission': submission, 'knowledge_partition': partition.describe() if partition else None, 'exams': [EXAMS[eid] for eid in exam_ids], 'assets': [item for item in ASSETS.values() if item['exam_id'] in exam_ids], 'pages': [item for item in PAGES.values() if item['exam_id'] in exam_ids], 'question_records': [item for item in QUESTION_RECORDS.values() if item['exam_id'] in exam_ids], 'analysis_runs': [item for item in RUNS.values() if item['submission_id'] == sid], 'verification_questions': [item for item in VERIFICATION_QUESTIONS.values() if item['submission_id'] == sid], 'mastery_records': [item for item in MASTERY_RECORDS.values() if item['submission_id'] == sid], 'versions': {'export_schema': '1.0.0', 'knowledge_base': knowledge_version, 'application': app.version}}
+    if format == 'json':
+        return payload
+
+    def _read_asset(asset: dict) -> bytes | None:
+        path = Path(asset.get('storage_path', ''))
+        try:
+            return path.read_bytes() if path.is_file() else None
+        except OSError:
+            return None
+
+    bundle = build_bundle(payload, _read_asset)
+    return Response(bundle, media_type='application/zip', headers={'Content-Disposition': f'attachment; filename="exam-diagnosis-backup-{sid[:8]}.zip"'})
 
 @app.delete('/api/submissions/{sid}')
 def delete_submission(sid: str):
@@ -1900,3 +1917,66 @@ def export_wrong_question_book(sid: str, format: str = 'pdf', edition: str = 're
     content = render_blocks_pdf(blocks) if format == 'pdf' else render_blocks_docx(blocks)
     filename = f'exam-diagnosis-wrong-book-{edition}-{sid[:8]}.{format}'
     return Response(content, media_type=EXPORT_MEDIA_TYPES[format], headers={'Content-Disposition': f'attachment; filename="{filename}"'})
+
+
+@app.post('/api/submissions/import', status_code=201)
+def import_submission(file: UploadFile = File(...), user_id: str = Depends(current_user_id)):
+    """Restore a submission from an export. Accepts the JSON snapshot or the zip bundle.
+
+    Always creates a *new* submission with fresh ids, so importing a backup onto the machine it
+    came from lands beside the original instead of overwriting it. Everything becomes owned by
+    the importing user. Assets whose file isn't in the bundle are marked `file_missing` — their
+    records stay (the questions reference them) but nothing pretends the image is there.
+    """
+    raw = file.file.read(MAX_BUNDLE_BYTES + 1)
+    if len(raw) > MAX_BUNDLE_BYTES:
+        return JSONResponse({'error': 'file_too_large', 'max_bytes': MAX_BUNDLE_BYTES}, status_code=413)
+    try:
+        payload, files = read_bundle(raw)
+        prepared = prepare_import(payload, user_id)
+    except BundleError as exc:
+        return JSONResponse({'error': 'invalid_bundle', 'detail': str(exc)}, status_code=422)
+
+    submission = prepared['submission']
+    uploads_root = paths.uploads_dir() / submission['id']
+    original_id = {new: old for old, new in prepared['id_map'].items()}
+    restored_files, missing = 0, []
+    for asset in prepared['assets']:
+        # Files in the bundle are keyed by the asset's *original* id, which the remap replaced.
+        content = files.get(original_id.get(asset['id']))
+        if content is None:
+            asset['file_missing'] = True
+            asset['storage_path'] = ''
+            missing.append(asset['id'])
+            continue
+        target = uploads_root / asset['exam_id']
+        target.mkdir(parents=True, exist_ok=True)
+        path = target / Path(str(asset.get('filename') or asset['id'])).name
+        path.write_bytes(content)
+        asset['storage_path'] = str(path)
+        asset['file_missing'] = False
+        restored_files += 1
+
+    SUBMISSIONS[submission['id']] = submission
+    for exam in prepared['exams']:
+        EXAMS[exam['id']] = exam
+    for asset in prepared['assets']:
+        ASSETS[asset['id']] = asset
+    for page in prepared['pages']:
+        PAGES[page['id']] = page
+    for record in prepared['question_records']:
+        QUESTION_RECORDS[record['id']] = record
+    for run in prepared['analysis_runs']:
+        RUNS[run['id']] = run
+    for question in prepared['verification_questions']:
+        VERIFICATION_QUESTIONS[question['id']] = question
+    for record in prepared['mastery_records']:
+        MASTERY_RECORDS[record['id']] = record
+
+    return {
+        'submission_id': submission['id'],
+        'imported': {name: len(prepared[name]) for name in ('exams', 'assets', 'pages', 'question_records', 'analysis_runs', 'verification_questions', 'mastery_records')},
+        'restored_files': restored_files,
+        'missing_files': missing,
+        'source_versions': payload.get('versions', {}),
+    }

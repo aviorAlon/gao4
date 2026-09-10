@@ -1,15 +1,17 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
-  Button, Card, Empty, Form, Popconfirm, Select, Spin, Table, Tag, message,
+  Button, Card, Empty, Flex, Form, Popconfirm, Select, Spin, Table, Tag, Typography, Upload, message,
 } from 'antd'
-import { PlusOutlined, DeleteOutlined } from '@ant-design/icons'
+import { PlusOutlined, DeleteOutlined, UploadOutlined } from '@ant-design/icons'
 import {
-  createSubmission, deleteSubmission, listKnowledgePartitions, listSubmissions,
+  createSubmission, deleteSubmission, importSubmission, listKnowledgePartitions, listSubmissions,
   type KnowledgePartition, type Submission,
 } from '../api'
 import { Masthead, SectionBlock } from '../chart/Chart'
 import '../chart/chart.css'
+
+const { Text } = Typography
 
 const STAGE_LABEL: Record<string, string> = { primary: '小学', middle: '初中', high: '高中' }
 
@@ -19,6 +21,7 @@ export default function HomePage() {
   const [submissions, setSubmissions] = useState<Submission[]>([])
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
+  const [importing, setImporting] = useState(false)
   const [form] = Form.useForm()
 
   async function reload() {
@@ -53,6 +56,26 @@ export default function HomePage() {
     } finally {
       setCreating(false)
     }
+  }
+
+  async function onImport(file: File) {
+    setImporting(true)
+    try {
+      const result = await importSubmission(file)
+      const missing = result.missing_files.length
+      message.success(
+        `已导入：${result.imported.exams} 场考试、${result.imported.question_records} 道题` +
+        (missing ? `，${missing} 个上传文件不在备份里（JSON 备份不含图片）` : `，${result.restored_files} 个文件已还原`),
+      )
+      await reload()
+      navigate(`/submissions/${result.submission_id}`)
+    } catch (e: any) {
+      const data = e?.response?.data
+      message.error(data?.error === 'invalid_bundle' ? `这不像本应用导出的备份：${data.detail}` : data?.error ?? e.message ?? '导入失败')
+    } finally {
+      setImporting(false)
+    }
+    return false  // never let antd upload it itself
   }
 
   async function onDelete(id: string) {
@@ -106,6 +129,20 @@ export default function HomePage() {
               <Button type="primary" htmlType="submit" icon={<PlusOutlined />} loading={creating}>创建任务</Button>
             </Form.Item>
           </Form>
+        </Card>
+      </SectionBlock>
+
+      <SectionBlock marker="neutral" title="导入备份">
+        <Card>
+          <Flex vertical gap="small" align="flex-start">
+            <Upload accept=".zip,.json" showUploadList={false} beforeUpload={onImport} disabled={importing}>
+              <Button icon={<UploadOutlined />} loading={importing}>选择备份文件（.zip / .json）</Button>
+            </Upload>
+            <Text type="secondary">
+              导入总是新建一个任务，不会覆盖已有数据——同一份备份导两次就是两份独立的副本。
+              zip 备份含上传的图片；JSON 只有数据，图片会标为缺失。
+            </Text>
+          </Flex>
         </Card>
       </SectionBlock>
 
