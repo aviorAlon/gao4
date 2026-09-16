@@ -162,8 +162,7 @@ def _q(number, wrong, text='求函数的定义域'):
 def test_trends_endpoint_follows_a_knowledge_point_across_two_exams():
     client = TestClient(app_module.app)
     submission = client.post('/api/submissions', json=SUBMISSION).json()
-    # An exam needs at least one wrong question to be confirmable (the tool exists to diagnose
-    # mistakes), so improvement shows up as a falling error rate, not as a flawless paper.
+    # Improvement here is a falling error rate; a fully clean paper is covered in test_all_correct_exam.py.
     _confirmed_exam(client, submission['id'], '月考一', [_q('1', True), _q('2', True)])
     _confirmed_exam(client, submission['id'], '月考二', [_q('1', True), _q('2', False), _q('3', False)])
     body = client.get(f"/api/submissions/{submission['id']}/trends").json()

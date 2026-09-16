@@ -281,7 +281,8 @@ function PagesAndDraft({ exam, onConfirmed }: { exam: Exam; onConfirmed: () => v
     } catch (e: any) {
       const code = e?.response?.data?.error
       message.error(
-        code === 'wrong_question_and_original_required' ? '至少需要一道题标记为「错题」并有可用的原题来源，才能确认考试'
+        code === 'questions_required' ? '还没有任何题目，先补录题目再确认'
+        : code === 'wrong_question_original_required' ? '标记为「错题」的题目需要有可用的原题，才能确认考试'
         : code === 'original_source_required' ? '有错题还没有关联原题来源，请在题目草稿里补上'
         : code ?? '确认失败',
       )

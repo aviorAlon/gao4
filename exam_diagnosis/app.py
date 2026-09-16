@@ -1000,7 +1000,15 @@ def confirm_exam(eid: str, body: ConfirmIn):
     if not exam: return JSONResponse({'error':'exam_not_found'},status_code=404)
     questions = body.questions or [QuestionIn(**q) for q in exam.get('draft_questions', [])]
     wrong=[q for q in questions if q.is_wrong_question]
-    if not wrong or any(not q.original_question_available for q in wrong): return JSONResponse({'error':'wrong_question_and_original_required'},status_code=422)
+    # An exam with no wrong answers is a result worth recording, not an input error: it's the
+    # data point that shows a student improving to a clean paper. Earlier this was refused
+    # ("at least one wrong question"), which meant the trend view could never show a 0% exam.
+    # What still can't be confirmed is an exam with nothing in it, or a wrong question with no
+    # original to diagnose against.
+    if not questions:
+        return JSONResponse({'error': 'questions_required'}, status_code=422)
+    if any(not q.original_question_available for q in wrong):
+        return JSONResponse({'error': 'wrong_question_original_required'}, status_code=422)
     draft_questions = exam.get('draft_questions', [])
     if not body.questions and any(
         q.is_wrong_question and not draft_questions[index].get('original_source')
