@@ -34,6 +34,7 @@ def test_status_endpoint_lists_every_role_and_never_leaks_secrets(monkeypatch):
     assert body['tasks'] == {'workers': 1, 'active': 0, 'failed': 0}
     assert body['budget'] == {'daily_token_budget': None, 'max_calls_per_minute': None, 'block_reason': None}
     assert body['application']['name'] == 'Exam Diagnosis'
+    assert body['features'] == {'qr_code': True}
     assert body['storage']['database'].endswith('.sqlite3')
     assert any(p['stage'] == 'high' and p['subject'] == '数学' for p in body['knowledge']['partitions'])
 
@@ -45,3 +46,9 @@ def test_status_counts_this_users_tasks_only():
     assert client.get('/api/system/status').json()['tasks'] == {'workers': 1, 'active': 0, 'failed': 1}
     other = TestClient(app_module.app, headers={'X-User-Id': 'someone-else'})
     assert other.get('/api/system/status').json()['tasks'] == {'workers': 1, 'active': 1, 'failed': 0}
+
+
+def test_status_reports_a_missing_qr_library(monkeypatch):
+    from exam_diagnosis import mobile
+    monkeypatch.setattr(mobile, 'qr_svg', lambda text: None)
+    assert TestClient(app_module.app).get('/api/system/status').json()['features']['qr_code'] is False

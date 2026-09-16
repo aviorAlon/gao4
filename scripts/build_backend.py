@@ -126,8 +126,11 @@ def exercise_backend(base_url: str) -> dict:
     status, _, raw = _call(base_url, 'GET', '/api/health')
     assert status == 200 and json.loads(raw)['status'] == 'ok', 'health check failed'
     _, _, raw = _call(base_url, 'GET', '/api/system/status')
-    partitions = json.loads(raw)['knowledge']['partitions']
+    system_status = json.loads(raw)
+    partitions = system_status['knowledge']['partitions']
     assert partitions, 'no knowledge partitions — data/knowledge was not bundled'
+    # Generating a QR exercises qrcode's lazily-imported SVG factory without opening a LAN port.
+    assert system_status['features']['qr_code'], 'QR generation failed — qrcode missing from the bundle?'
     _, _, raw = _call(base_url, 'POST', '/api/submissions', {'stage': 'high', 'subject': '数学', 'province': '广东', 'school_grade': '高二', 'academic_year_label': '25-26'})
     submission = json.loads(raw)
     _, _, raw = _call(base_url, 'POST', f"/api/submissions/{submission['id']}/exams", {'name': '打包冒烟'})
@@ -142,7 +145,7 @@ def exercise_backend(base_url: str) -> dict:
     assert status == 200 and pdf.startswith(b'%PDF') and 'pdf' in ctype, 'PDF export failed (PyMuPDF missing from bundle?)'
     status, ctype, docx = _call(base_url, 'GET', f"/api/reports/{run['id']}/export?format=docx")
     assert status == 200 and docx.startswith(b'PK') and 'wordprocessingml' in ctype, 'Word export failed (python-docx template missing from bundle?)'
-    return {'partitions': len(partitions), 'pdf_bytes': len(pdf), 'docx_bytes': len(docx)}
+    return {'partitions': len(partitions), 'qr_code': True, 'pdf_bytes': len(pdf), 'docx_bytes': len(docx)}
 
 
 def smoke(executable: Path, timeout: float = 60) -> dict:

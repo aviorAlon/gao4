@@ -1809,6 +1809,9 @@ def system_status(user_id: str = Depends(current_user_id)):
             'failed': sum(1 for item in my_tasks if item.get('status') == 'failed'),
         },
         'knowledge': {'partitions': available_partitions(user_id=user_id)},
+        # Optional pieces whose absence degrades a feature instead of breaking the app — surfaced
+        # here so a frozen build that lost one is visible (and so its smoke test can assert it).
+        'features': {'qr_code': mobile.qr_svg('exam-diagnosis') is not None},
     }
 
 

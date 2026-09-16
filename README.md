@@ -56,6 +56,14 @@ bash / git-bash / WSL：
 PYTHONPATH=. pytest -q
 ```
 
+**一键跑完 CI 的全部检查**（后端测试 + 前端 lint + 类型检查/构建），和 `.github/workflows/ci.yml` 是同一套：
+
+```bash
+python scripts/check.py
+```
+
+`--backend` / `--frontend` 只跑一边。CI 在推送到 GitHub 后自动运行：后端测试在 Linux 和 Windows 上各跑一遍（桌面版发 Windows，且父进程看门狗在两个平台上走不同实现），前端跑 `npm ci` → lint → build。测试全程不用任何模型 key、不产生付费调用。前端 lint 目前有十几条 warning（组件挂载时加载数据的 effect 写法），不阻塞。
+
 ## 数据与配置
 
 - 所有可写数据在一个根目录下：`EXAM_DIAGNOSIS_DATA_DIR`，默认是当前目录下的 `data/`（网页部署一直就是这样，不设就不变）。桌面版把它指到用户的应用数据目录。
