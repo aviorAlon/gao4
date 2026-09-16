@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { Alert, Button, Card, Collapse, Empty, Flex, Segmented, Select, Space, Spin, Tag, Typography, message } from 'antd'
+import { Alert, Button, Card, Collapse, Empty, Flex, Segmented, Select, Space, Spin, Tag, Typography } from 'antd'
+import { message } from '../feedback'
 import { DownloadOutlined, PrinterOutlined } from '@ant-design/icons'
 import {
   downloadWrongBook, fetchWrongBook, listSubmissions,

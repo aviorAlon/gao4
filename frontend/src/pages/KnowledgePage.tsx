@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
-  Alert, Button, Card, Divider, Empty, Flex, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Spin, Table, Tag, Typography, Upload, message,
+  Alert, Button, Card, Divider, Empty, Flex, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Spin, Table, Tag, Typography, Upload,
 } from 'antd'
+import { message } from '../feedback'
 import { DeleteOutlined, DownloadOutlined, PlusOutlined, UploadOutlined } from '@ant-design/icons'
 import {
   createKnowledgeBase, deleteKnowledgeBase, deleteKnowledgePoint, downloadKnowledgeBase, importKnowledgeBase,

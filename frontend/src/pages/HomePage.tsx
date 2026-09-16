@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
-  Button, Card, Empty, Flex, Form, Popconfirm, Select, Spin, Table, Tag, Typography, Upload, message,
+  Button, Card, Empty, Flex, Form, Popconfirm, Select, Spin, Table, Tag, Typography, Upload,
 } from 'antd'
+import { message } from '../feedback'
 import { PlusOutlined, DeleteOutlined, UploadOutlined } from '@ant-design/icons'
 import {
   createSubmission, deleteSubmission, importSubmission, listKnowledgePartitions, listSubmissions,

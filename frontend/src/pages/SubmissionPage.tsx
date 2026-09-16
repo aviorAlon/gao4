@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams, Link } from 'react-router-dom'
-import { Breadcrumb, Button, Card, Empty, Flex, Input, Space, Spin, Table, Tag, message } from 'antd'
+import { Breadcrumb, Button, Card, Empty, Flex, Input, Space, Spin, Table, Tag } from 'antd'
+import { message } from '../feedback'
 import { PlusOutlined, DownloadOutlined } from '@ant-design/icons'
 import {
   createExam, downloadSubmissionBackup, downloadSubmissionExport, getSubmission, listAnalysisRuns, listExams,

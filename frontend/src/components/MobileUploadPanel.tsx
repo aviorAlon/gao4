@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { Alert, Button, Card, Flex, Select, Space, Tag, Typography, message } from 'antd'
+import { Alert, Button, Card, Flex, Select, Space, Tag, Typography } from 'antd'
+import { message } from '../feedback'
 import { MobileOutlined, StopOutlined } from '@ant-design/icons'
 import { getMobileUploadStatus, startMobileUpload, stopMobileUpload, type MobileUploadSession } from '../api'
 

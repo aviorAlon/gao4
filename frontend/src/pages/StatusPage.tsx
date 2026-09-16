@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Alert, Button, Card, Flex, Space, Spin, Table, Tag, Typography, message } from 'antd'
+import { Alert, Button, Card, Flex, Space, Spin, Table, Tag, Typography } from 'antd'
+import { message } from '../feedback'
 import { ReloadOutlined } from '@ant-design/icons'
 import {
   fetchSystemStatus, listModelCalls, listTasks,

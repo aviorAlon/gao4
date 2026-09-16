@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
-  Alert, Breadcrumb, Button, Card, Collapse, Descriptions, Divider, Empty, Flex, Input, InputNumber, Progress,
-  Result, Space, Spin, Table, Tag, Tooltip, Typography, Row, Col, message,
+  Alert, Breadcrumb, Button, Card, Collapse, Descriptions, Divider, Empty, Flex, Input, InputNumber, Progress, Result, Space, Spin, Table, Tag, Tooltip, Typography, Row, Col,
 } from 'antd'
+import { message } from '../feedback'
 import {
   BulbOutlined, CheckCircleOutlined, DownloadOutlined, ExclamationCircleOutlined,
 } from '@ant-design/icons'

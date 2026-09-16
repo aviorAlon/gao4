@@ -1,8 +1,9 @@
 import { Suspense, lazy } from 'react'
-import { ConfigProvider, Spin } from 'antd'
+import { App as AntApp, ConfigProvider, Spin } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import AppNav from './AppNav'
+import { FeedbackBridge } from './feedback'
 
 // Each page is its own chunk, loaded on first visit — the report page alone pulls in a fair
 // amount of antd that the home page never needs.
@@ -59,6 +60,8 @@ const theme = {
 export default function App() {
   return (
     <ConfigProvider locale={zhCN} theme={theme}>
+      <AntApp>
+      <FeedbackBridge />
       <BrowserRouter>
         <AppNav />
         <Suspense fallback={<div className="page-shell"><Spin /></div>}>
@@ -78,6 +81,7 @@ export default function App() {
           </Routes>
         </Suspense>
       </BrowserRouter>
+      </AntApp>
     </ConfigProvider>
   )
 }

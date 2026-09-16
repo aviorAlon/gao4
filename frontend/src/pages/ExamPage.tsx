@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams, Link } from 'react-router-dom'
 import {
-  Alert, Breadcrumb, Button, Card, Checkbox, Divider, Empty, Flex, Input, InputNumber, Popconfirm, Select, Spin,
-  Steps, Table, Tag, Typography, Upload, message,
+  Alert, Breadcrumb, Button, Card, Checkbox, Divider, Empty, Flex, Input, InputNumber, Popconfirm, Select, Spin, Steps, Table, Tag, Typography, Upload,
 } from 'antd'
+import { message } from '../feedback'
 import type { UploadFile } from 'antd'
 import { InboxOutlined, CheckCircleOutlined, UndoOutlined, LinkOutlined, PlusOutlined, DeleteOutlined, ReloadOutlined } from '@ant-design/icons'
 import {

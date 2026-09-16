@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Alert, Button, Card, Flex, Input, InputNumber, Space, Spin, Tag, Typography, message } from 'antd'
+import { Alert, Button, Card, Flex, Input, InputNumber, Space, Spin, Tag, Typography } from 'antd'
+import { message } from '../feedback'
 import { SaveOutlined } from '@ant-design/icons'
 import { fetchSettings, updateSettings, type RoleSettings, type SettingsResponse, type SettingsUpdate } from '../api'
 import { Masthead, SectionBlock } from '../chart/Chart'
