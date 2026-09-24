@@ -607,8 +607,23 @@ export interface RoleSettings {
   locked: boolean
 }
 
+/** Provider-wide fallback for every role's base_url/model. `*_default` is the built-in profile shown
+ *  as placeholder; a value is null when nothing overrides it. */
+export interface ProviderSettings {
+  base_url: string | null
+  base_url_source: SettingSource
+  base_url_default: string
+  reasoning_model: string | null
+  reasoning_model_source: SettingSource
+  reasoning_model_default: string
+  fast_model: string | null
+  fast_model_source: SettingSource
+  fast_model_default: string
+}
+
 export interface SettingsResponse {
   roles: RoleSettings[]
+  provider: ProviderSettings
   budget: {
     daily_token_budget: number | null
     daily_token_budget_source: SettingSource
@@ -622,6 +637,7 @@ export interface SettingsResponse {
 
 export interface SettingsUpdate {
   roles?: Record<string, { api_key?: string; base_url?: string | null; model?: string | null; timeout?: number | string | null }>
+  provider?: { base_url?: string | null; reasoning_model?: string | null; fast_model?: string | null }
   budget?: { daily_token_budget?: number | null; max_calls_per_minute?: number | null }
 }
 

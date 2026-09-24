@@ -1,32 +1,17 @@
-# React + TypeScript + Vite
+# Exam Diagnosis — frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+React 19 + TypeScript + Vite + antd. This is the web UI for the API backend in the repository root,
+and the very same page that the Tauri desktop shell (`src-tauri/`) loads into a native window.
 
-Currently, two official plugins are available:
-
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+npm install
+npm run dev            # http://localhost:5173, talks to the backend on 127.0.0.1:8765
+npm run lint           # oxlint
+npm run build          # tsc -b && vite build → dist/
+npm run desktop:dev    # Tauri window with hot reload
+npm run desktop:build  # installer under src-tauri/target/release/bundle/
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+Hard rule for every page: **nothing may depend on browser chrome** (no `<a href>` to downloads, no
+`window.location`, no new tabs). The desktop window has none of it. See the "Desktop app" section
+of the root [README](../README.md) for what to use instead.

@@ -3,13 +3,21 @@ import { Link } from 'react-router-dom'
 import { Alert, Button, Card, Flex, Input, InputNumber, Space, Spin, Tag, Typography } from 'antd'
 import { message } from '../feedback'
 import { SaveOutlined } from '@ant-design/icons'
-import { fetchSettings, updateSettings, type RoleSettings, type SettingsResponse, type SettingsUpdate } from '../api'
+import { fetchSettings, updateSettings, type ProviderSettings, type RoleSettings, type SettingsResponse, type SettingsUpdate } from '../api'
 import { Masthead, SectionBlock } from '../chart/Chart'
 import '../chart/chart.css'
 
 const { Text } = Typography
 
 type RoleDraft = { api_key?: string; clear_key?: boolean; base_url?: string; model?: string; timeout?: string }
+type ProviderDraft = { base_url?: string; reasoning_model?: string; fast_model?: string }
+type ProviderField = keyof ProviderDraft
+
+const PROVIDER_FIELDS: { field: ProviderField; label: string; hint: string; width: number }[] = [
+  { field: 'base_url', label: '接口地址', hint: 'OpenAI-compatible 的 base URL', width: 420 },
+  { field: 'reasoning_model', label: '推理档模型', hint: '错因诊断 / 验证题生成 / 批改', width: 260 },
+  { field: 'fast_model', label: '快速档模型', hint: '题目切分 / 报告概述 / 知识点匹配', width: 260 },
+]
 
 function SourceTag({ source }: { source: 'env' | 'config' | null }) {
   if (source === 'env') return <Tag color="blue">环境变量</Tag>
@@ -69,6 +77,7 @@ export default function SettingsPage() {
   const [settings, setSettings] = useState<SettingsResponse | null>(null)
   const [drafts, setDrafts] = useState<Record<string, RoleDraft>>({})
   const [budgetDraft, setBudgetDraft] = useState<{ daily_token_budget?: number | null; max_calls_per_minute?: number | null }>({})
+  const [providerDraft, setProviderDraft] = useState<ProviderDraft>({})
   const [saving, setSaving] = useState(false)
 
   async function reload() {
@@ -76,6 +85,7 @@ export default function SettingsPage() {
       setSettings(await fetchSettings())
       setDrafts({})
       setBudgetDraft({})
+      setProviderDraft({})
     } catch (e: any) {
       message.error(e?.response?.data?.error ?? e.message ?? '加载失败（后端是不是还没重启到新版本？）')
     }
@@ -95,6 +105,12 @@ export default function SettingsPage() {
       if (Object.keys(fields).length) update.roles![role] = fields
     }
     update.budget = budgetDraft
+    const provider: NonNullable<SettingsUpdate['provider']> = {}
+    for (const { field } of PROVIDER_FIELDS) {
+      const value = providerDraft[field]
+      if (value !== undefined) provider[field] = value.trim() || null
+    }
+    if (Object.keys(provider).length) update.provider = provider
     return update
   }
 
@@ -105,6 +121,7 @@ export default function SettingsPage() {
       setSettings(saved)
       setDrafts({})
       setBudgetDraft({})
+      setProviderDraft({})
       message.success('已保存并立即生效，不需要重启')
     } catch (e: any) {
       const data = e?.response?.data
@@ -119,7 +136,7 @@ export default function SettingsPage() {
     }
   }
 
-  const dirty = Object.keys(drafts).length > 0 || Object.keys(budgetDraft).length > 0
+  const dirty = Object.keys(drafts).length > 0 || Object.keys(budgetDraft).length > 0 || Object.keys(providerDraft).length > 0
 
   return (
     <div className="page-shell">
@@ -145,8 +162,31 @@ export default function SettingsPage() {
           <Alert
             type="warning" showIcon style={{ marginBottom: 16 }}
             title="key 只会保存在本机，不会出现在任何接口返回里"
-            description="填一个角色的 API key 就启用那个角色；模型和接口地址留空用 DeepSeek 默认值。填错了会在系统状态页看到调用失败，不会影响本地兜底流程。"
+            description="填一个角色的 API key 就启用那个角色；模型和接口地址留空则用下面「默认服务商」里的值。填错了会在系统状态页看到调用失败，不会影响本地兜底流程。"
           />
+
+          <SectionBlock marker="neutral" title="默认服务商">
+            <Card>
+              <Flex vertical gap="small">
+                <Text type="secondary">所有角色没单独填模型 / 接口地址时用这里的值。任何 OpenAI-compatible 服务都可以：换服务商只需改这三项，不必逐个角色改。留空 = 用内置默认值（灰字）。</Text>
+                {PROVIDER_FIELDS.map(({ field, label, hint, width }) => {
+                  const provider: ProviderSettings = settings.provider
+                  const source = provider[`${field}_source`]
+                  return (
+                    <Flex key={field} align="center" gap="small" wrap>
+                      <Text style={{ width: 96 }}>{label}</Text>
+                      <Input
+                        style={{ maxWidth: width }} disabled={!settings.writable || source === 'env'} placeholder={provider[`${field}_default`]}
+                        value={providerDraft[field] ?? provider[field] ?? ''} onChange={(e) => setProviderDraft((d) => ({ ...d, [field]: e.target.value }))}
+                      />
+                      <SourceTag source={source} />
+                      <Text type="secondary">{hint}</Text>
+                    </Flex>
+                  )
+                })}
+              </Flex>
+            </Card>
+          </SectionBlock>
 
           <SectionBlock marker={settings.roles.some((r) => r.configured) ? 'resolved' : 'caution'} title="模型角色">
             <Flex vertical gap="middle">

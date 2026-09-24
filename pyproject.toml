@@ -5,8 +5,33 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "exam-diagnosis"
 version = "0.1.0"
+description = "Local-first exam diagnosis: parse a student's exam papers, map wrong questions to knowledge points, diagnose root causes and generate reports, practice and review plans."
+readme = "README.md"
 requires-python = ">=3.11"
+keywords = ["education", "exam", "diagnosis", "knowledge-points", "fastapi", "tauri", "local-first"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Web Environment",
+  "Framework :: FastAPI",
+  "Intended Audience :: Education",
+  "Natural Language :: Chinese (Simplified)",
+  "Natural Language :: English",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Education",
+]
 dependencies = ["fastapi", "uvicorn", "python-multipart", "PyYAML", "PyMuPDF", "fonttools", "python-docx", "qrcode"]
+
+[project.optional-dependencies]
+# `pip install -e .[dev]` — what the test suite and CI need on top of the runtime dependencies.
+dev = ["pytest", "httpx"]
+# `pip install -e .[desktop]` — freezing the backend for the Tauri desktop build.
+desktop = ["pyinstaller"]
+
+[tool.setuptools]
+packages = ["exam_diagnosis"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

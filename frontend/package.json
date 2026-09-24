@@ -1,7 +1,8 @@
 {
-  "name": "frontend",
+  "name": "exam-diagnosis-frontend",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
+  "description": "Exam Diagnosis web UI (React + Vite + antd), also the page inside the Tauri desktop shell",
   "type": "module",
   "scripts": {
     "dev": "vite",

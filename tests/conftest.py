@@ -28,6 +28,10 @@ def _never_use_real_model_credentials():
     """
     for role in MODEL_ROLES:
         os.environ.pop(f'EXAM_DIAGNOSIS_{role}_API_KEY', None)
+    # Provider-wide defaults (EXAM_DIAGNOSIS_DEFAULT_*) aren't secrets, but a value left in the
+    # shell would silently change what "the default model" is in every test that asserts it.
+    for name in ('EXAM_DIAGNOSIS_DEFAULT_BASE_URL', 'EXAM_DIAGNOSIS_DEFAULT_REASONING_MODEL', 'EXAM_DIAGNOSIS_DEFAULT_FAST_MODEL'):
+        os.environ.pop(name, None)
 
 
 @pytest.fixture(autouse=True, scope='session')

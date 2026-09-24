@@ -6,34 +6,33 @@ be reported as a success. Callers get ``None`` back and are expected to fall
 back to their deterministic rule-based path — the same rule that keeps OCR
 from claiming a fake success when no vision parser is configured.
 
-Four roles are defined today:
+Six roles are defined, in two tiers:
 
-- ``analysis``: root-cause diagnosis of a wrong question. Needs real math
-  reasoning, defaults to ``deepseek-v4-pro`` (thinking mode).
-- ``report``: light narrative/summary writing. Defaults to the cheaper
-  ``deepseek-v4-flash``.
-- ``split``: splitting a page's extracted text into individual questions.
-  Real exam papers use too many incompatible numbering conventions for a
-  fixed regex to cover reliably; this is a light classification-shaped task,
-  so it also defaults to ``deepseek-v4-flash``.
-- ``verify``: generating one real variant practice question (with a fully
-  worked reference answer) per error cluster. Getting both the problem and
-  its solution right needs the same reasoning tier as ``analysis``, so it
-  also defaults to ``deepseek-v4-pro``.
-- ``grade``: marking a student's submitted answer to a verification question
-  against its reviewed reference answer. Judging partial credit on a worked
-  math solution is reasoning work too, so it defaults to ``deepseek-v4-pro``.
+- ``analysis`` (root-cause diagnosis of a wrong question), ``verify``
+  (generating one real variant practice question with a fully worked reference
+  answer per error cluster) and ``grade`` (marking a student's submitted answer
+  against its reviewed reference answer) need real math reasoning — the
+  **reasoning** tier.
+- ``report`` (narrative summary), ``split`` (cutting a page's extracted text
+  into individual questions; real exam papers use too many incompatible
+  numbering conventions for a fixed regex) and ``match`` (picking knowledge
+  points from a candidate list) are light, classification-shaped work — the
+  cheaper **fast** tier.
 
 Every role is opt-in and independently configurable via environment
 variables, e.g. for ``analysis``:
 
 - ``EXAM_DIAGNOSIS_ANALYSIS_API_KEY`` (required to activate the role)
-- ``EXAM_DIAGNOSIS_ANALYSIS_BASE_URL`` (defaults to DeepSeek's endpoint)
-- ``EXAM_DIAGNOSIS_ANALYSIS_MODEL`` (defaults to ``deepseek-v4-pro``)
+- ``EXAM_DIAGNOSIS_ANALYSIS_BASE_URL``
+- ``EXAM_DIAGNOSIS_ANALYSIS_MODEL``
 - ``EXAM_DIAGNOSIS_ANALYSIS_TIMEOUT`` (seconds, defaults to 30)
 
-Swap in any OpenAI-compatible provider by overriding base_url/model; only the
-API key gates whether the role is active at all.
+``BASE_URL`` / ``MODEL`` resolve in three steps: the per-role variable, then
+the provider-wide defaults ``EXAM_DIAGNOSIS_DEFAULT_BASE_URL`` /
+``EXAM_DIAGNOSIS_DEFAULT_REASONING_MODEL`` / ``EXAM_DIAGNOSIS_DEFAULT_FAST_MODEL``
+(one place to point every role at a different OpenAI-compatible provider),
+then the built-in profile in ``BUILTIN_PROVIDER``. Only the API key gates
+whether the role is active at all.
 """
 from __future__ import annotations
 
@@ -46,18 +45,54 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-DEEPSEEK_BASE_URL = 'https://api.deepseek.com'
-
-ROLE_DEFAULTS = {
-    'analysis': {'base_url': DEEPSEEK_BASE_URL, 'model': 'deepseek-v4-pro'},
-    'report': {'base_url': DEEPSEEK_BASE_URL, 'model': 'deepseek-v4-flash'},
-    'split': {'base_url': DEEPSEEK_BASE_URL, 'model': 'deepseek-v4-flash'},
-    'verify': {'base_url': DEEPSEEK_BASE_URL, 'model': 'deepseek-v4-pro'},
-    'grade': {'base_url': DEEPSEEK_BASE_URL, 'model': 'deepseek-v4-pro'},
-    # Picking knowledge points from a candidate list is classification, not reasoning — the
-    # cheaper tier is fine and it runs once per question.
-    'match': {'base_url': DEEPSEEK_BASE_URL, 'model': 'deepseek-v4-flash'},
+# The provider every role talks to when nothing else is configured. It is a plain
+# OpenAI-compatible profile, not a hard dependency: override it for all roles at once with the
+# EXAM_DIAGNOSIS_DEFAULT_* variables (or the "default provider" section of the settings page), or
+# per role with EXAM_DIAGNOSIS_<ROLE>_BASE_URL / _MODEL.
+BUILTIN_PROVIDER = {
+    'base_url': 'https://api.deepseek.com',
+    'reasoning_model': 'deepseek-v4-pro',
+    'fast_model': 'deepseek-v4-flash',
 }
+PROVIDER_ENV = {
+    'base_url': 'EXAM_DIAGNOSIS_DEFAULT_BASE_URL',
+    'reasoning_model': 'EXAM_DIAGNOSIS_DEFAULT_REASONING_MODEL',
+    'fast_model': 'EXAM_DIAGNOSIS_DEFAULT_FAST_MODEL',
+}
+# Which tier each role wants. Diagnosing a wrong answer, writing a correct worked solution and
+# grading one are reasoning work; splitting text, summarising numbers and picking knowledge points
+# from a candidate list are classification-shaped and run fine on the cheaper tier.
+ROLE_TIERS = {
+    'analysis': 'reasoning', 'verify': 'reasoning', 'grade': 'reasoning',
+    'report': 'fast', 'split': 'fast', 'match': 'fast',
+}
+# The role registry (which roles exist) with the built-in defaults — the values here are what a
+# fresh install uses; `role_defaults()` is what the running process actually resolves to.
+ROLE_DEFAULTS = {
+    role: {'base_url': BUILTIN_PROVIDER['base_url'], 'model': BUILTIN_PROVIDER[f'{tier}_model']}
+    for role, tier in ROLE_TIERS.items()
+}
+
+
+def provider_defaults() -> dict[str, Any]:
+    """The provider-wide defaults as currently effective: each field's value, and whether it came
+    from the environment or is the built-in profile."""
+    result: dict[str, Any] = {}
+    for field, name in PROVIDER_ENV.items():
+        raw = os.getenv(name)
+        result[field] = raw or BUILTIN_PROVIDER[field]
+        result[f'{field}_source'] = 'env' if raw else 'builtin'
+        result[f'{field}_builtin'] = BUILTIN_PROVIDER[field]
+    return result
+
+
+def role_defaults(role: str) -> dict[str, str]:
+    """base_url/model a role falls back to when its own EXAM_DIAGNOSIS_<ROLE>_* variables are unset:
+    the provider-wide environment defaults if given, else the built-in profile."""
+    if role not in ROLE_TIERS:
+        raise ValueError(f'unknown model role: {role}')
+    provider = provider_defaults()
+    return {'base_url': provider['base_url'], 'model': provider[f"{ROLE_TIERS[role]}_model"]}
 
 
 @dataclass
@@ -153,7 +188,7 @@ def role_status(role: str) -> dict[str, Any]:
     if role not in ROLE_DEFAULTS:
         raise ValueError(f'unknown model role: {role}')
     prefix = f'EXAM_DIAGNOSIS_{role.upper()}_'
-    defaults = ROLE_DEFAULTS[role]
+    defaults = role_defaults(role)
     return {
         'role': role,
         'purpose': ROLE_PURPOSES.get(role, role),
@@ -169,9 +204,10 @@ def client_from_env(role: str, on_call: Callable[[dict[str, Any]], None] | None 
     """Build a ChatClient for `role` from EXAM_DIAGNOSIS_<ROLE>_* env vars.
 
     Only the API key is required to opt in — base_url/model fall back to the
-    DeepSeek defaults for that role, matching the vision parser's "must be
-    fully configured or stay off" stance, minus needing three vars for every
-    role: an operator only has to supply a key to activate real inference.
+    provider defaults for that role's tier (see `role_defaults`), matching the
+    vision parser's "must be fully configured or stay off" stance, minus needing
+    three vars for every role: an operator only has to supply a key to activate
+    real inference.
 
     `on_call` is optional and purely for observability (see `ChatClient.on_call`); omitting it
     changes nothing about whether or how the role runs.
@@ -182,7 +218,7 @@ def client_from_env(role: str, on_call: Callable[[dict[str, Any]], None] | None 
     api_key = os.getenv(prefix + 'API_KEY')
     if not api_key:
         return None
-    defaults = ROLE_DEFAULTS[role]
+    defaults = role_defaults(role)
     base_url = os.getenv(prefix + 'BASE_URL') or defaults['base_url']
     model = os.getenv(prefix + 'MODEL') or defaults['model']
     timeout = float(os.getenv(prefix + 'TIMEOUT') or 30)

@@ -1,286 +1,300 @@
-# Exam Diagnosis MVP
+# Exam Diagnosis
 
-本仓库是独立于 `D:/selfProject/DeepTutor` 的本地单用户考试诊断 MVP，当前默认演示范围为：高中 / 数学 / 广东。
+**English** · [简体中文](README.zh-CN.md)
 
-## 启动
+A local-first tool that turns a student's exam papers into a diagnosis: which questions went wrong, which knowledge points they map to, *why* they went wrong, what to practise next, and how the picture changes across exams. It ships as a web app (FastAPI backend + React frontend) and as a Windows desktop app (Tauri) that embeds the backend.
 
-后端只提供 JSON API，不再自带页面（早期版本 `/` 会返回一份内嵌 HTML 的临时界面，已经被下面的独立前端取代并从代码里删掉）。
+Everything runs on your machine. Model inference is optional and pluggable: any OpenAI-compatible provider works, one role at a time, and every step has a deterministic fallback that is honest about being a fallback — the application never fakes an OCR result, a diagnosis or a grade it did not actually obtain.
 
-在仓库根目录启动后端。PowerShell（Windows 默认终端）：
+Status: **0.1.0, alpha.** The mechanics are complete and tested (about 400 backend tests, CI on Linux and Windows); the bundled public knowledge base is a placeholder partition (high-school mathematics, Guangdong, 14 knowledge points). See [Current limitations](#current-limitations).
 
-```powershell
-$env:PYTHONPATH = "."
-uvicorn exam_diagnosis.app:app --host 127.0.0.1 --port 8765
+## Contents
+
+- [Features](#features)
+- [How it works](#how-it-works)
+- [Quick start (web)](#quick-start-web)
+- [Configuration](#configuration)
+  - [Model roles](#model-roles)
+  - [Default provider](#default-provider)
+  - [Vision parsing (images and scanned PDFs)](#vision-parsing-images-and-scanned-pdfs)
+  - [Cost control](#cost-control)
+  - [Login and multi-user mode](#login-and-multi-user-mode)
+  - [All environment variables](#all-environment-variables)
+- [Desktop app (Tauri)](#desktop-app-tauri)
+- [Phone photo upload over the LAN](#phone-photo-upload-over-the-lan)
+- [Knowledge bases](#knowledge-bases)
+- [Reports, exports and the learning loop](#reports-exports-and-the-learning-loop)
+- [Background tasks and observability](#background-tasks-and-observability)
+- [API overview](#api-overview)
+- [Development](#development)
+- [Project layout](#project-layout)
+- [Current limitations](#current-limitations)
+- [Contributing, security, license](#contributing-security-license)
+
+## Features
+
+- **Upload anything**: text, PDF (with a text layer or scanned), images — from the computer, or straight from a phone camera over the local network via a QR code (no internet, no HTTPS setup).
+- **Parse and confirm**: questions are split out, shown for review, and confirmed by a human before anything is analysed. Machine value → user correction → confirmed value is recorded per question.
+- **Knowledge-point mapping**: keyword matching plus optional semantic matching by a model, against a public knowledge base layered with the user's own.
+- **Root-cause diagnosis** per wrong question (missed condition, calculation error, unclear concept, misread question, sloppy writing, or *needs manual confirmation*), a knowledge tree with error rates and review priorities, and a confidence checklist that states exactly why a conclusion is only partially supported.
+- **Verification questions**: one variant practice question with a worked reference answer per error cluster, gated by an independent review step — an unreviewed answer is never shown to the student. Student attempts are graded by a model against the *reviewed* answer, or self-assessed when no model is configured.
+- **Review plan** (spaced repetition ladder 1/3/7/16/35 days), **wrong-question book** (with a printable practice version), and **cross-exam trends**.
+- **Exports**: Markdown, HTML, PDF and Word from one shared block structure, honouring the same review gate; personal data export/import as a portable bundle.
+- **Desktop app** with the backend embedded, a settings page for keys (never returned in any API response), a system-status page and a model-call log with budget and rate limits.
+- **Optional accounts**: single local user with zero configuration by default; token-based login with per-user isolation when required.
+
+## How it works
+
+```
+upload ──► parse (text / PDF / vision) ──► review & confirm questions ──► confirm exam
+                                                                             │
+   review plan ◄── verification questions ◄── report ◄── analysis run ◄──────┘
+   wrong-question book                          │
+   trends across exams                          └── root causes · knowledge tree · priorities
 ```
 
-cmd.exe：
+- **Parsing** is per page. Text and PDFs with a text layer are read directly; images and scanned PDFs (no text layer) go through the vision parser if one is configured, otherwise the page is flagged `manual_confirmation_required`. Pages whose subject does not match the exam are excluded from statistics but kept and listed.
+- **Confirmation** is the trust boundary: only confirmed questions enter analysis. Reopening a confirmed exam bumps its version and supersedes (never deletes) the old question records, and a report always states which exam versions it was built from.
+- **Analysis** maps each question to knowledge points, diagnoses wrong questions, builds the knowledge tree, computes `review_priority` from error *rate* (1/1 wrong outranks 1/10), separates *curriculum scope* from *what this exam actually assessed*, and collects `quality_flags`.
+- **Models are optional per role** (see [Model roles](#model-roles)). Without a key, that role uses its rule-based fallback and the output says so — e.g. regex question splitting is always marked `review_required`.
 
-```cmd
-set PYTHONPATH=.
-uvicorn exam_diagnosis.app:app --host 127.0.0.1 --port 8765
-```
+## Quick start (web)
 
-bash / git-bash / WSL：
+Requirements: Python 3.11+, Node.js 20+ (CI uses 24). Rust is only needed for the desktop build.
 
 ```bash
-PYTHONPATH=. uvicorn exam_diagnosis.app:app --host 127.0.0.1 --port 8765
+git clone <this repository> exam_diagnosis
+cd exam_diagnosis
+python -m pip install -e .[dev]
 ```
 
-再启动前端（`frontend/` 是独立的 React + Vite 项目，第一次要先 `npm install`）：
+Start the backend (JSON API only, on `127.0.0.1:8765`):
+
+```bash
+uvicorn exam_diagnosis.app:app --host 127.0.0.1 --port 8765
+```
+
+Start the frontend (first time: `npm --prefix frontend install`):
 
 ```bash
 npm --prefix frontend run dev
 ```
 
-浏览器打开：`http://localhost:5173/`
+Open <http://localhost:5173/>. Without any model key the whole pipeline runs on its deterministic fallbacks, which is enough to see every screen.
 
-## 测试
+To enable model inference, either fill in keys on the **Settings** page (`/settings`, stored in `<data_dir>/config.json`, effective immediately) or copy [`.env.local.example`](.env.local.example) to `.env.local` and fill in the roles you want.
 
-PowerShell：
+## Configuration
 
-```powershell
-$env:PYTHONPATH = "."
-pytest -q
-```
+### Data directory
 
-cmd.exe：
+All writable data lives under one root, `EXAM_DIAGNOSIS_DATA_DIR` (default `./data`): the SQLite database `exam_diagnosis.sqlite3` (or `EXAM_DIAGNOSIS_DB`), `uploads/`, and `config.json`. The desktop app points it at the user's application-data directory. Public knowledge-base YAML files live in `data/knowledge/` (or `EXAM_DIAGNOSIS_KNOWLEDGE_DIR`).
 
-```cmd
-set PYTHONPATH=.
-pytest -q
-```
+Settings precedence is **environment (including `.env.local`) > `config.json`**. A value owned by the environment is locked on the settings page — saving it would be inert, so the API refuses with `409 locked_by_environment` instead. In multi-user mode the settings page is read-only and the operator configures the server through the environment. Keys are reported only as *set/unset + source*, never in plain text.
 
-bash / git-bash / WSL：
+### Model roles
+
+Six text roles, each opt-in and independently configurable through `EXAM_DIAGNOSIS_<ROLE>_{API_KEY,BASE_URL,MODEL,TIMEOUT}`. Setting the `API_KEY` alone activates a role; `BASE_URL`/`MODEL` fall back to the [default provider](#default-provider).
+
+| Role | Tier | What it does | Fallback when off |
+|---|---|---|---|
+| `split` | fast | Split a page's extracted text into questions | Built-in regex, always marked `review_required` |
+| `match` | fast | Pick knowledge points for a question by meaning; merged with keyword hits (`keyword`, `model`, `keyword+model`) | Keyword matching only |
+| `analysis` | reasoning | Root cause + explanation + avoidance advice per wrong question (cached per question) | Keyword-based root cause |
+| `verify` | reasoning | One real variant question with a worked reference answer per error cluster | Fixed template prompt |
+| `grade` | reasoning | Grade a student's answer against a *reviewed* reference answer (0–1, pass ≥ 0.8, one line of feedback); never runs on unreviewed answers | Student self-assessment |
+| `report` | fast | Narrative summary from the already-computed statistics only; may not invent data | Structured report without narrative |
+
+All roles share the same rule as the vision parser: not configured, request failed, or response not valid JSON of the expected shape ⇒ the role is treated as unavailable and the fallback is used. Every call — success, failure or blocked — is logged (see [observability](#background-tasks-and-observability)); the attempt record's `graded_by` (`model`/`self`) says who graded.
+
+### Default provider
+
+Every role talks to an OpenAI-compatible `/chat/completions` endpoint. Rather than configuring six roles, point them all at your provider once:
 
 ```bash
-PYTHONPATH=. pytest -q
+EXAM_DIAGNOSIS_DEFAULT_BASE_URL=https://api.your-provider.com/v1
+EXAM_DIAGNOSIS_DEFAULT_REASONING_MODEL=your-reasoning-model   # analysis / verify / grade
+EXAM_DIAGNOSIS_DEFAULT_FAST_MODEL=your-fast-model             # split / report / match
 ```
 
-**一键跑完 CI 的全部检查**（后端测试 + 前端 lint + 类型检查/构建），和 `.github/workflows/ci.yml` 是同一套：
+The same three fields are on the settings page under **Default provider**. Resolution order per role: `EXAM_DIAGNOSIS_<ROLE>_*` → `EXAM_DIAGNOSIS_DEFAULT_*` → the built-in profile in [`llm.py`](exam_diagnosis/llm.py) (`BUILTIN_PROVIDER`). `GET /api/system/status` shows the effective values and where each came from (`env` / `config` / `builtin`).
+
+### Vision parsing (images and scanned PDFs)
+
+Enabled only when all three of `EXAM_DIAGNOSIS_VISION_BASE_URL`, `EXAM_DIAGNOSIS_VISION_API_KEY` and `EXAM_DIAGNOSIS_VISION_MODEL` are set (also editable on the settings page). It sends an OpenAI-compatible multimodal request with the image as a base64 data URL (PNG/JPEG detected from bytes) and requires a JSON response — so the model must genuinely accept image input. Timeout `EXAM_DIAGNOSIS_VISION_TIMEOUT` (default 60 s).
+
+Scanned PDFs (pages but no text layer) are detected automatically and rendered page by page at 150 dpi through the vision parser; results are merged back into one asset (`ocr_text` concatenated per page, questions accumulated in page order, confidence = worst page). Any failed page marks the asset `review_required` and is named in `warning`; if no page succeeds or no vision parser is configured, it degrades to manual entry with the reason spelled out. Each page is a paid call, so at most `EXAM_DIAGNOSIS_SCANNED_PDF_MAX_PAGES` (default 30) pages are processed. Vision calls are logged under the role `vision` and count against the same budget.
+
+### Cost control
+
+Two optional global limits shared by all roles (default: unlimited): `EXAM_DIAGNOSIS_MODEL_DAILY_TOKEN_BUDGET` (successful tokens per UTC day) and `EXAM_DIAGNOSIS_MODEL_MAX_CALLS_PER_MINUTE`. A blocked call never touches the network but is still logged with `blocked: true` and the reason (`daily_token_budget_exceeded` / `rate_limited`), and the role's fallback runs.
+
+### Login and multi-user mode
+
+- `POST /api/auth/register` (username 3–32 chars of `[a-z0-9_.-]`, password ≥ 8), `/login`, `/logout`, `GET /api/auth/me`. Bearer tokens expire after `EXAM_DIAGNOSIS_SESSION_TTL_HOURS` (default 720) or on logout. Passwords: pbkdf2-sha256, 200 000 rounds, random salt; only the token's sha256 is stored; five failed logins lock the username for 15 minutes (429); unknown user and wrong password return the same `invalid_credentials`.
+- `EXAM_DIAGNOSIS_AUTH_REQUIRED` unset (default): identity comes from the `X-User-Id` header (default `local`) — zero-config single user. A valid token overrides it; an invalid or expired token is a 401, never a silent fallback.
+- `EXAM_DIAGNOSIS_AUTH_REQUIRED=1`: every endpoint except register/login needs a valid token and `X-User-Id` is ignored. Resource ownership is enforced in one dependency; another user's resource is a 404, not a 403.
+
+### All environment variables
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `EXAM_DIAGNOSIS_DATA_DIR` | `./data` | Root of all writable data |
+| `EXAM_DIAGNOSIS_DB` | `<data_dir>/exam_diagnosis.sqlite3` | SQLite file |
+| `EXAM_DIAGNOSIS_KNOWLEDGE_DIR` | `data/knowledge` | Public knowledge-base YAML directory |
+| `EXAM_DIAGNOSIS_<ROLE>_API_KEY` | unset | Activates the role (`SPLIT`, `MATCH`, `ANALYSIS`, `VERIFY`, `GRADE`, `REPORT`) |
+| `EXAM_DIAGNOSIS_<ROLE>_BASE_URL` / `_MODEL` / `_TIMEOUT` | provider default / 30 s | Per-role overrides |
+| `EXAM_DIAGNOSIS_DEFAULT_BASE_URL` | built-in profile | Provider-wide endpoint |
+| `EXAM_DIAGNOSIS_DEFAULT_REASONING_MODEL` | built-in profile | Model for `analysis`/`verify`/`grade` |
+| `EXAM_DIAGNOSIS_DEFAULT_FAST_MODEL` | built-in profile | Model for `split`/`report`/`match` |
+| `EXAM_DIAGNOSIS_VISION_BASE_URL` / `_API_KEY` / `_MODEL` / `_TIMEOUT` | unset / 60 s | Vision parser (all three required) |
+| `EXAM_DIAGNOSIS_SCANNED_PDF_MAX_PAGES` | 30 | Page cap for scanned PDFs |
+| `EXAM_DIAGNOSIS_MODEL_DAILY_TOKEN_BUDGET` | unlimited | Daily token budget (UTC) |
+| `EXAM_DIAGNOSIS_MODEL_MAX_CALLS_PER_MINUTE` | unlimited | Rate limit |
+| `EXAM_DIAGNOSIS_TASK_WORKERS` | 1 | Background worker threads |
+| `EXAM_DIAGNOSIS_AUTH_REQUIRED` | 0 | Require login |
+| `EXAM_DIAGNOSIS_SESSION_TTL_HOURS` | 720 | Token lifetime |
+| `EXAM_DIAGNOSIS_BACKEND_EXE` | auto | Desktop shell: explicit backend executable path |
+
+## Desktop app (Tauri)
+
+`frontend/src-tauri/` is a Tauri 2 shell around the same React frontend (Windows uses the system WebView2), with the Python backend frozen by PyInstaller and shipped as a resource. Requirements: the Rust toolchain (`cargo`), `npm install` in `frontend/`, and `pip install -e .[desktop]`.
 
 ```bash
-python scripts/check.py
+python scripts/build_backend.py                 # freeze backend → frontend/src-tauri/resources/backend/ and smoke-test it
+npm --prefix frontend run desktop:build         # installer under frontend/src-tauri/target/release/bundle/
+npm --prefix frontend run desktop:dev           # development window with hot reload
 ```
 
-`--backend` / `--frontend` 只跑一边。CI 在推送到 GitHub 后自动运行：后端测试在 Linux 和 Windows 上各跑一遍（桌面版发 Windows，且父进程看门狗在两个平台上走不同实现），前端跑 `npm ci` → lint → build。测试全程不用任何模型 key、不产生付费调用。前端 lint 目前有十几条 warning（组件挂载时加载数据的 effect 写法），不阻塞。
+`build_backend.py` produces a onedir bundle (~100 MB) and then actually runs it: create a submission → confirm → report → export PDF and Word → generate a QR code. PyInstaller drops data files silently (python-docx templates, PyMuPDF's native library, knowledge YAML, the QR SVG factory), and those only fail at runtime, so the smoke test is not optional.
 
-## 数据与配置
+At runtime the shell launches `exam-diagnosis-backend --port 0 --data-dir <AppData> --parent-pid <shell pid>`, reads the `LISTENING host:port` line it prints, and the frontend fetches that address through the Tauri command `api_base` and polls `/api/health` before showing the UI. On normal exit the shell kills the backend; if the shell is force-killed, the backend's parent-process watchdog exits by itself (Win32 handle wait on Windows, pid polling elsewhere), so no orphan keeps the port. The child's environment is scrubbed of every `EXAM_DIAGNOSIS_*_API_KEY`: desktop keys come from the settings page's `config.json` only. Data lives in `%APPDATA%\com.examdiagnosis.desktop\` on Windows. If no embedded backend is found (development), the shell launches nothing and the frontend falls back to `127.0.0.1:8765`.
 
-- 所有可写数据在一个根目录下：`EXAM_DIAGNOSIS_DATA_DIR`，默认是当前目录下的 `data/`（网页部署一直就是这样，不设就不变）。桌面版把它指到用户的应用数据目录。
-- SQLite 默认位置：`<data_dir>/exam_diagnosis.sqlite3`，`EXAM_DIAGNOSIS_DB` 可单独指定。
-- 上传文件写入 `<data_dir>/uploads/`（`data/` 下的这些都被 `.gitignore` 忽略）。
-- **设置页**（前端 `/settings`，接口 `GET/PUT /api/settings`）：模型各角色的 API key / 模型 / 接口地址 / 超时，以及成本预算，可以在界面里填，保存到 `<data_dir>/config.json`，保存即生效不用重启。key 只回报"已设置/未设置"和来源，永远不回传明文。优先级：环境变量（含 `.env.local`）> `config.json`——被环境变量设定的项在设置页里锁定不可改（硬存也不会生效，所以直接拒绝并说明）。`EXAM_DIAGNOSIS_AUTH_REQUIRED` 开启的多用户模式下设置页只读，服务器范围的配置由部署者通过环境变量管理。
-- `GET /api/health`：存活检查，无需鉴权，返回版本和数据目录；`python -m exam_diagnosis.server --port 0 --data-dir X` 是给桌面壳用的启动入口（自动挑空闲端口并在 stdout 打 `LISTENING host:port`），网页部署照旧用 `uvicorn exam_diagnosis.app:app`。
-- 知识库资源目录：`data/knowledge/`，可通过 `EXAM_DIAGNOSIS_KNOWLEDGE_DIR` 指定。
-- 目录下每个 YAML 是一个知识库分区，必须声明 `stage`、`subject`、`province`、`curriculum_year`、`academic_year_range`、`version` 和 `knowledge_points`；同一组 `stage/subject/province/curriculum_year` 只允许一个分区。
-- 当前随仓库发布的分区只有 `high_math_guangdong_v1.yaml`（高中 / 数学 / 广东 / 2017 课标），但代码不写死该分区，新增 YAML 即可启用新的阶段、科目、省份或课程方案年份。
-- 图片视觉解析只有在同时配置以下环境变量时启用：
-  - `EXAM_DIAGNOSIS_VISION_BASE_URL`
-  - `EXAM_DIAGNOSIS_VISION_API_KEY`
-  - `EXAM_DIAGNOSIS_VISION_MODEL`
-- 视觉接口使用 OpenAI-compatible `/chat/completions` 多模态请求，图片编码为 base64 data URL（按字节自动识别 PNG / JPEG），并要求 JSON 响应。需要一个真正支持图片输入的模型（DeepSeek 目前的对话模型不接受图片；比如通义千问 Qwen-VL 的 OpenAI-compatible 接口就可以）。超时默认 60 秒，可用 `EXAM_DIAGNOSIS_VISION_TIMEOUT` 调整。
-- 未配置视觉解析器、请求失败或响应 JSON 无法解析时，结果明确标记为 `manual_confirmation_required`，不会伪造 OCR 成功。
-- **扫描版 PDF**（手机扫描/复印得到的、没有文字层的 PDF）会被自动识别：文字层为空但有页面的 PDF 不再按"空文本"处理，而是逐页渲染成图片（150 dpi）走视觉解析，再把各页结果合并回这一个上传资料（合并后的 `ocr_text` 按页拼接，题目按页顺序累加，置信度取最差一页）。有任何一页视觉解析没成功，整份资料标 `review_required` 并在 `warning` 里点名是第几页；一页都没成功、或者根本没配视觉解析，就和别的解析失败一样退到人工录入，`warning` 会写清楚原因（"该 PDF 为扫描件……未配置视觉解析"）。每页都是一次付费的视觉调用，所以默认最多识别前 30 页（`EXAM_DIAGNOSIS_SCANNED_PDF_MAX_PAGES` 可改），超出的页数会在 `warning` 里说明。视觉调用和其它角色一样记进 `/api/model-calls`（角色名 `vision`）并受同一份预算/限速约束。
+**Hard rule: no feature may depend on browser chrome.** The desktop window has no back button, address bar, download manager, tabs or F5. Concretely:
 
-## 模型推理（题目切分 / 错因诊断 / 验证题生成 / 验证题批改 / 报告概述 / 知识点匹配）
+- Navigation: a global nav bar on every page (back / home / knowledge / status / settings / identity); "back" uses the in-app router history. The login page offers "continue without logging in" when login is optional.
+- Downloads: every export (PDF/Word/Markdown/HTML/YAML/JSON) goes through `saveBlob()` — a native "Save as" dialog plus the Rust command `save_file` on desktop, `<a download>` only in a browser. Never link `<a href>` directly to an export endpoint: the WebView replaces the whole app with the response and cannot come back, and the link carries no auth.
+- No `window.location.assign/reload`, `window.open` or `target=_blank`. Session loss is an `exam-diagnosis:auth-lost` event handled by the router.
+- External resources: only Google Fonts, which degrade to system fonts offline. The backend CORS allows the WebView origins (`http://tauri.localhost`, `tauri://localhost`); the CSP allows any local port because the backend port is dynamic.
 
-- 按角色配置，六个角色互相独立，默认都不开启：
-  - `match`（题目→知识点语义匹配）：`EXAM_DIAGNOSIS_MATCH_API_KEY` / `EXAM_DIAGNOSIS_MATCH_BASE_URL` / `EXAM_DIAGNOSIS_MATCH_MODEL` / `EXAM_DIAGNOSIS_MATCH_TIMEOUT`（默认 `deepseek-v4-flash`，见"公共知识库与用户自维护知识库"）
-  - `split`（题目切分）：`EXAM_DIAGNOSIS_SPLIT_API_KEY` / `EXAM_DIAGNOSIS_SPLIT_BASE_URL` / `EXAM_DIAGNOSIS_SPLIT_MODEL` / `EXAM_DIAGNOSIS_SPLIT_TIMEOUT`
-  - `analysis`（错因诊断）：`EXAM_DIAGNOSIS_ANALYSIS_API_KEY` / `EXAM_DIAGNOSIS_ANALYSIS_BASE_URL` / `EXAM_DIAGNOSIS_ANALYSIS_MODEL` / `EXAM_DIAGNOSIS_ANALYSIS_TIMEOUT`
-  - `verify`（验证题生成）：`EXAM_DIAGNOSIS_VERIFY_API_KEY` / `EXAM_DIAGNOSIS_VERIFY_BASE_URL` / `EXAM_DIAGNOSIS_VERIFY_MODEL` / `EXAM_DIAGNOSIS_VERIFY_TIMEOUT`
-  - `grade`（验证题批改）：`EXAM_DIAGNOSIS_GRADE_API_KEY` / `EXAM_DIAGNOSIS_GRADE_BASE_URL` / `EXAM_DIAGNOSIS_GRADE_MODEL` / `EXAM_DIAGNOSIS_GRADE_TIMEOUT`
-  - `report`（报告概述）：`EXAM_DIAGNOSIS_REPORT_API_KEY` / `EXAM_DIAGNOSIS_REPORT_BASE_URL` / `EXAM_DIAGNOSIS_REPORT_MODEL` / `EXAM_DIAGNOSIS_REPORT_TIMEOUT`
-- 只需配置对应角色的 `API_KEY` 即可启用；`BASE_URL`/`MODEL` 不填时默认为 DeepSeek 的 `https://api.deepseek.com`，`analysis`/`verify`/`grade` 默认推理档 `deepseek-v4-pro`，`split`/`report` 默认更便宜的 `deepseek-v4-flash`；换成任意 OpenAI-compatible 服务商只需覆盖这两项。
-- `grade` 角色在学生提交验证题作答时调用：拿题干、已复核的参考答案和学生作答让模型批改，给出 0-1 的得分比例和一句具体反馈，"是否通过"以模型的判定为准（≥0.8 通过），学生自评的分数仍然保留在记录里。只对参考答案**已通过独立复核**的验证题启用——拿一份没审过的参考答案去批改，只会把错答案洗成一个看起来可信的分数。未配置/调用失败/参考答案未复核时，退回原来的学生自评判定，作答记录上的 `graded_by` 字段（`model` / `self`）说明这次是谁判的。
-- `split` 角色替代文本/PDF 内容原来的正则切题：不同试卷题号格式差异很大（"1."、"第1题"、"1、"……），正则难以覆盖所有情况，交给模型按语义切分更可靠。图片走的视觉解析模型本来就是模型切题，这个角色补齐的是文本/PDF 这条路径。
-- `analysis` 角色只对错题调用，按知识点+题目内容判断根因（条件遗漏/计算错误/概念不清/审题错误/书写不规范/待人工确认之一）并给出针对这道题的解释和规避建议，结果按题目 id 缓存，同一题不会重复调用。
-- `verify` 角色按错因专题调用，生成一道真正的变式练习题和完整参考答案（含关键步骤），而不是"完成一道变式题并说明关键步骤"这句固定模板；生成的内容仍然要过独立审查阶段（见下）才会把参考答案展示给学生。
-- `report` 角色只读取已经算好的结构化统计（错题数、根因分布、复习优先级前几项、质量提示），生成一段面向学生/家长的概述文字，不允许编造数据里没有的信息。
-- 五个角色都遵循和视觉解析一致的规则：没配置、请求失败、响应不是合法 JSON 或不满足预期结构时一律判定为不可用，自动退回各自的兜底逻辑，不会伪造成功。`split` 的兜底是内置的正则匹配（覆盖"第N题"/"N题"/"N."/"N、"/"N．"），但正则结果一律标记 `review_required`，需要人工确认切分是否准确、完整——不能因为规则跑完了就当成解析可信；`verify` 的兜底是原来那句固定模板；`grade` 的兜底是学生自评的分数。
-- 这些 `API_KEY` 不想每次开新终端都用 `$env:...` 重设的话，可以复制 [`.env.local.example`](.env.local.example) 为同目录下的 `.env.local`，把占位符换成真实 key。`.env.local` 已经在 `.gitignore` 的 `.env.*` 规则里，不会被提交；启动时会自动加载，真实的环境变量（如果两边都设了）优先于文件里的值。
+## Phone photo upload over the LAN
 
-## 后台任务队列
+Photographing a paper is a phone job; the app runs on the computer. This channel connects them **without the internet**:
 
-- 解析考试（逐页视觉调用）和生成报告（多次模型调用，推理档模型动辄几十秒）不再占着 HTTP 请求跑：`POST /api/jobs/{job_id}/enqueue` 和 `POST /api/analysis-runs/{run_id}/generate` 都立刻返回 202 和一个 `task_id`，工作在进程内的工作线程上执行。
-- 轮询：`GET /api/tasks/{task_id}`（`queued` / `running` / `completed` / `failed`，失败带 `error`）；解析任务也可以直接 `GET /api/jobs/{job_id}` 看每个阶段的状态；报告直接 `GET /api/analysis-runs/{run_id}/report`，生成中返回 202 `report_generating`，好了返回 200。`GET /api/tasks?status=` 列出当前用户的任务。
-- 同一个任务不会被重复排队：解析任务排队/运行中再 `enqueue` 或同步 `run` 返回 409 `job_already_enqueued`；报告生成中再 `generate` 直接返回同一个 `task_id`；报告已存在时 `generate` 返回 200。
-- 原来的同步接口 `POST /api/jobs/{job_id}/run` 和"直接 GET 报告触发生成"都保留，脚本和测试仍可用；前端已改为后台任务 + 轮询，页面上能看到解析到哪一步。
-- 进程内线程池，不依赖 Redis/Celery——本地单用户应用，多一个守护进程没有收益。默认 1 个工作线程（`EXAM_DIAGNOSIS_TASK_WORKERS` 可调）：工作主要是等模型，多个并行只会互相抢同一份 token 预算。
-- 任务记录和其它数据一样存在 SQLite 里，工作线程完成后自行落盘（请求中间件的落盘对后台线程不生效）。进程重启时，上次还在 `queued`/`running` 的任务会被标成 `failed`（`error: process_restarted`），对应的解析任务标 `failed` 以便 `retry`，生成中的报告 run 退回 `queued`——不会留下永远"运行中"的幽灵任务。
+1. Click "Upload from phone" on an exam → a QR code appears (with every candidate IP of this machine listed, because a machine often has Wi-Fi, Ethernet, VPN and WSL addresses and guessing silently is the worst failure mode).
+2. Phone on the same Wi-Fi scans it → a tiny self-contained page served by the backend (`/m/<token>`) opens the camera with `<input type="file" capture="environment">` — no `getUserMedia`, so plain HTTP is fine and no certificate is needed.
+3. Files land directly on that exam; the desktop counts them live; click "Done, start parsing".
 
-## 报告导出
+Security model: the main server keeps listening on `127.0.0.1` only. Opening a channel starts a second listener on `0.0.0.0` that stops when the channel is closed or expires (15 min). Requests arriving through that listener may only reach `/m/*` and `/api/mobile-upload/*` — everything else is 403, decided by *which port the request came in on*, so binding your own web deployment to `0.0.0.0` is unaffected. The token in the QR is one-shot and scoped to a single exam (upload only; stored as SHA-256). It is shown once; after a page reload the UI says so and offers "regenerate". Windows asks for a firewall permission the first time — allow *private networks*.
 
-- `GET /api/reports/{run_id}/export?format=md|html|pdf|docx`。`md`/`html` 直接返回文本；`pdf`/`docx` 以附件下载（`Content-Disposition: attachment`，文件名 `exam-diagnosis-report-<run_id 前 8 位>.pdf/.docx`）。
-- PDF 和 Word 从同一份中间结构（`export.report_blocks`：标题 / 段落 / 列表 / 编号列表）渲染，章节和内容与 Markdown 版一致，包括"未通过复核的验证题答案不展示"这条规则——导出文件里同样只出现占位说明，不会带出未审核的答案。
-- PDF 用已有依赖 PyMuPDF 的 Story 排版引擎生成（自带中文回退字体，A4 自动分页），不需要再装 weasyprint/reportlab 这类工具；装了 `fonttools` 时会做字体子集化，否则每份 PDF 会内嵌整套约 3.5MB 的中文字体（内容仍然正确，只是文件大）。Word 用 `python-docx`，标题/列表用 Word 内置样式，中文字体指定为宋体。
+## Knowledge bases
 
-## 手机拍照上传（局域网）
+Two layers: the **public** knowledge base shipped as YAML partitions in `data/knowledge/` (keyed by `stage / subject / province / curriculum_year`), and each user's **own** knowledge base in SQLite, isolated per user.
 
-拍试卷照片是手机的事，应用跑在电脑上。这条通道把两边接起来，**不经过公网**：
+- A partition YAML declares `stage`, `subject`, `province`, `curriculum_year`, `academic_year_range`, `version` and `knowledge_points`; only one partition per key. Adding a YAML enables a new stage/subject/province/curriculum — nothing is hard-coded to the bundled partition. Knowledge points carry `grade_scope`, `dependencies`, keywords and a confidence value, all validated on load.
+- A user base either **extends** the public partition (same `knowledge_id` overrides the public definition, e.g. to add keywords) or is **standalone** for a subject/region the product does not cover. Resolution always prefers the user's base; `GET /api/knowledge-partitions` is the user's view (`source: public|user`), and merged points carry `origin`.
+- Management: `GET/POST /api/knowledge-bases`, `GET/PUT/DELETE /api/knowledge-bases/{id}`, `POST .../points` (add or override), `DELETE .../points/{knowledge_id}`, `POST /api/knowledge-bases/import` (YAML in the public format), `GET .../export`. Every write is fully validated (422 with the reason); a user base invalidated by a public update is skipped at resolution time and its `problem` field explains why.
+- Submissions must target an existing partition (`422 knowledge_partition_not_found` lists the available ones), the grade must be within the partition's `academic_year_range` (`422 grade_outside_partition_scope`), and the academic-year label (`25-26` or `2025-2028`) must cover at least one full year. Every submission, report and export records the partition, curriculum, version and years it used.
 
-- 电脑上在「上传考试资料」或「资料」区点「用手机拍照上传」→ 出二维码 → 手机连同一个 Wi-Fi 扫码 → 拍照/选图 → 文件直接落到这场考试上 → 电脑上实时看到份数增加 → 点「传完了，开始解析」。
-- **不是把 API 开放到内网**：主服务始终只监听 127.0.0.1。开通道时另起一个 0.0.0.0 的监听，通道关掉（或 15 分钟到期）就停。而且即使开着，从这个监听进来的请求也只允许访问 `/m/*` 和 `/api/mobile-upload/*`，其它一律 403——判定依据是"请求从哪个监听端口进来的"，所以运维自己把 web 部署绑到 0.0.0.0 不受影响。
-- **二维码里是一次性、限定作用域的令牌**：只能往这一场考试传文件，读不到报告、看不到别的数据、改不了设置。库里只存令牌的 SHA-256。
-- **不需要 HTTPS**：手机页用 `<input type="file" capture="environment">` 直接唤起系统相机，不走 `getUserMedia`（后者要求安全上下文，纯 http 的内网地址不满足）。所以不用自签证书、不用在手机上点信任。
-- **手机页由后端自己提供**（`/m/<token>`，一个自包含的 HTML）：桌面版里前端在 WebView 里，根本没有可供手机访问的 HTTP 服务；而且这一页很小，Wi-Fi 上秒开。
-- 二维码里的 IP 从本机所有网卡里挑，**列出全部候选**让用户切换——一台机器常有 Wi-Fi、有线、VPN、Docker/WSL 多个地址，猜错了却不告诉用户是最差的失败方式。
-- Windows 第一次开通道会弹防火墙授权，要允许「专用网络」手机才连得上；界面上写了这句。
-- 令牌只在生成时给出一次。页面刷新过之后，界面会说明"通道还开着但这个页面拿不到二维码了"，并提供「重新生成二维码」（关掉旧的换新的），而不是假装还能用。
+Building out content is a later phase; the mechanism is done.
 
-## 桌面客户端（Tauri）
+## Reports, exports and the learning loop
 
-**硬约束：任何功能都不能依赖浏览器提供的东西。** 桌面窗口里没有后退按钮、地址栏、下载管理器、新标签页，也没有 F5。具体落实：
+- **Report**: wrong questions, root causes with evidence, avoidance advice, knowledge tree (`question_count`, `wrong_count`, `error_rate`, `review_priority`, `priority_score`), `review_order`, `scope_coverage` (each curriculum point `assessed_with_errors` / `assessed_without_errors` / `not_assessed` — the last means *not covered by this paper*, not *not mastered*), `quality_flags` (incomplete material, pages needing confirmation, low confidence, excluded pages, unmapped questions, missing scores — each with `code`, `severity`, `message`), `exam_versions`, and the completeness checklist (wrong questions, original questions, reference answers, student answers, teacher marks).
+- **Review gate**: after generation an independent `report.review` step checks knowledge mapping, evidence references and every verification question's answer. Failures are `needs_review`: the answer is withheld everywhere (API returns `answer_withheld` + `withheld_reason`; exports show a placeholder). `POST /api/verification-questions/{id}/review` with `{approved, answer, note}` lifts it; approving an empty answer is refused (`422 cannot_approve_empty_answer`).
+- **Exports**: `GET /api/reports/{run_id}/export?format=md|html|pdf|docx`. PDF uses PyMuPDF's Story engine with a bundled CJK fallback font (subsetted with fontTools when available), A4 with automatic pagination; Word uses python-docx with built-in heading/list styles. Both render the same block structure as the Markdown version.
+- **Verification & mastery**: each attempt stores the answer, score, pass/fail, time taken and `graded_by`. Mastery is tracked per knowledge point + error cluster: `not_started` → `in_progress` → `provisionally_resolved` → `resolved`, dropping back on failure; every attempt is kept.
+- **Review plan**: a spaced-repetition ladder (1, 3, 7, 16, 35 days) per item, advanced or reset by each attempt; the nav bar shows what is due.
+- **Wrong-question book**: per submission or across all, grouped by knowledge point, with a practice version that hides answers; exportable.
+- **Trends**: error rate, root-cause mix and knowledge-point movement across a student's exams, with a direction judgement (improving / worsening / flat, threshold 0.2). Exams with zero wrong questions are confirmable precisely so the curve can reach zero.
+- **Portability**: `GET /api/submissions/{id}/export` (personal data JSON), a zip **bundle** export/import that remaps ids on import and guards against path traversal, and cascading delete that also removes the submission's files under `uploads/`.
+- **Deduplication**: identical bytes within one exam are rejected with the existing asset's id, filename and sha256, regardless of filename.
 
-- 导航：每个页面顶部有全局导航条（返回 / 诊断台 / 知识库 / 系统状态 / 设置 / 当前身份），"返回"用应用内路由历史，没有历史就回首页；登录页在后端不强制登录时有"返回，不登录"和"不登录，直接使用"。
-- 下载：导出 PDF/Word/Markdown/HTML/YAML/JSON 全部走 `saveBlob()`——桌面端弹原生"另存为"（Tauri dialog 插件）再由 Rust 命令 `save_file` 写盘；浏览器里才用 `<a download>`。**不要再写 `<a href>` 直链到导出接口**：WebView 会把整个应用页面替换成响应内容且回不来，而且直链不带登录态。
-- 跳转：不用 `window.location.assign/reload`。会话失效由 axios 拦截器发 `exam-diagnosis:auth-lost` 事件，导航条监听后用路由跳到 `/login`；退出登录同样走路由。
-- 外部资源：`index.html` 引了 Google Fonts，离线时退化到系统字体，功能不受影响；除此之外不得依赖任何外网资源。
-- 新页面自检清单：能从导航条到达并返回？所有"下载/导出"用的是 `saveBlob`/`downloadFromApi`？没有 `window.location`/`window.open`/`target=_blank`？
+## Background tasks and observability
 
+- Parsing (per-page vision calls) and report generation (many model calls) run on an in-process worker pool, not inside the HTTP request: `POST /api/jobs/{job_id}/enqueue` and `POST /api/analysis-runs/{run_id}/generate` return `202` with a `task_id`; poll `GET /api/tasks/{task_id}` (`queued`/`running`/`completed`/`failed`), `GET /api/jobs/{job_id}` for per-stage progress, or `GET /api/analysis-runs/{run_id}/report` (`202 report_generating` until ready). Duplicate enqueues are refused (`409 job_already_enqueued`) or return the same task. The synchronous `POST /api/jobs/{job_id}/run` remains for scripts.
+- No Redis/Celery: `EXAM_DIAGNOSIS_TASK_WORKERS` threads (default 1 — the work is waiting on models, and parallel workers only compete for one budget). Tasks persist in SQLite; on restart anything still `queued`/`running` is marked `failed` (`error: process_restarted`) so no ghost task stays "running" forever.
+- `GET /api/model-calls?role=&limit=`: the current user's model calls (role, model, latency, success/failure/blocked, error, tokens) with summary statistics and the live `budget` state. The log is capped at 500 rows.
+- `GET /api/system/status`: every role (configured?, effective model/endpoint/timeout, env prefix — never the key), the effective default provider and its sources, auth mode, task counts, budget block reason, storage paths, the user's knowledge partitions and optional features (`qr_code`). The `/status` page shows all of it together.
+- `GET /api/health`: public liveness with version, data dir and `auth_required`.
 
-- `frontend/src-tauri/` 是 Tauri 2 的桌面壳：同一套 React 前端装进原生窗口（Windows 用系统自带的 WebView2），不是另写一份 UI。需要 Rust 工具链（`cargo`）和 `frontend` 目录下的 `npm install`。
-- 开发：`npm --prefix frontend run desktop:dev`（自动起 Vite 再开窗口）；打包：`npm --prefix frontend run desktop:build`，产物在 `frontend/src-tauri/target/release/`（exe 和安装包）。
-- **自带后端**：`python scripts/build_backend.py` 用 PyInstaller 把 API 后端冻结成 `frontend/src-tauri/resources/backend/`（onedir，约 100MB），并自动做一次冒烟测试——用冻结出来的程序真的跑一遍"建任务 → 确认 → 报告 → 导出 PDF/Word"，因为 PyInstaller 漏掉数据文件（python-docx 模板、PyMuPDF 原生库、知识库 YAML）时只会在运行期炸。之后 `desktop:build` 会把这个目录作为资源打进安装包。
-- 运行时：壳启动即拉起 `backend/exam-diagnosis-backend.exe --port 0 --data-dir <用户 AppData> --parent-pid <壳的 pid>`，读它打出的 `LISTENING host:port`，前端通过 Tauri 命令 `api_base` 拿到地址，再轮询 `/api/health` 确认就绪才显示界面；壳正常退出时杀掉后端进程，壳被强杀/崩溃时后端靠 `--parent-pid` 看门狗自己退出（Windows 上等父进程句柄被触发，其它平台轮询 pid），不会留下占着端口的孤儿进程。子进程的环境里会剔除所有 `EXAM_DIAGNOSIS_*_API_KEY`——桌面版的 key 一律来自设置页写的 `config.json`，不会意外继承开发者 shell 里的变量。
-- 没找到内置后端时（`tauri dev` 但还没跑 `build_backend.py`，或开发者自己起后端），壳不拉起任何进程，前端退回默认的 `127.0.0.1:8765`；也可用 `EXAM_DIAGNOSIS_BACKEND_EXE` 指定后端程序路径。
-- 窗口的 CSP 放行本机任意端口（后端端口是动态的）、Google Fonts 和内联样式（antd 需要）。
-- 后端 CORS 同时放行桌面 WebView 的来源（Windows 上是 `http://tauri.localhost`，其它平台 `tauri://localhost`）——第一版漏了这个，表现为安装后一直停在"本地服务没有响应"，而终端 curl 一切正常。启动页失败时现在会显示实际连接的地址和最后一次错误原因，并可重试。
-- 数据位置：Windows 上是 `%APPDATA%\com.examdiagnosis.desktop\`（数据库、上传文件、`config.json`）。
+## API overview
 
-## 系统状态
+All endpoints are JSON under `/api/`; the backend serves no pages except the phone-upload page under `/m/`. The main flow:
 
-- `GET /api/system/status`：每个模型角色（六个文本角色 + `vision`）是否配置、实际使用的模型/接口/超时、对应的环境变量前缀——只报"有没有 key"，绝不带 key 本身；再加登录模式、后台任务数、预算拦截原因、数据库/上传目录路径、当前用户视角的知识库分区。
-- 前端 `/status` 页面把它和 `/api/model-calls`、`/api/tasks` 放在一起：角色表、最近模型调用（成功/失败/被拦下、延迟、token）、后台任务（失败原因、关联报告）。判断"模型是不是真的在跑"看这一页即可。
-
-## 模型调用可观测性与成本控制
-
-- `GET /api/model-calls`（可选 `role`、`limit` 查询参数）返回当前用户触发过的模型调用记录：角色、模型、延迟、成功与否、失败原因、token 用量，以及汇总统计（总数/成功/失败/平均延迟/总 token）和当前的 `budget` 状态。
-- 每次调用不管成功失败都会记一笔，日志表有上限（500 条），超出自动清理最旧的——这是调试用的可观测性，不是需要长期保留的审计日志。
-- 两个可选的全局开关（默认都不限制，四个角色共用一份额度，不是分角色各设一个）：
-  - `EXAM_DIAGNOSIS_MODEL_DAILY_TOKEN_BUDGET`：当天（UTC）累计成功调用的 token 总数超过这个数，后续调用直接不发起，直接走各角色的兜底逻辑。
-  - `EXAM_DIAGNOSIS_MODEL_MAX_CALLS_PER_MINUTE`：最近一分钟调用次数达到这个数，同样直接拦下。
-- 被拦下的调用不会真的碰网络，但会记一笔到 `/api/model-calls`，标 `blocked: true` 和具体原因（`daily_token_budget_exceeded` / `rate_limited`），不是悄无声息地就是不触发。
-
-## 公共知识库与用户自维护知识库
-
-- 两层：产品自带的**公共知识库**（`data/knowledge/*.yaml`，按阶段/科目/省份/课标年份分区）和每个用户**自己维护的知识库**（存在 SQLite 的 `user_knowledge` 表，按用户隔离）。当前公共库内容只是占位（14 个知识点），内容运营是产品成型后的事，这里做的是机制。
-- 用户库两种形态，由 `extends_public` 决定：**扩展公共库**（同一分区的公共知识点做底，用户的知识点叠加；`knowledge_id` 相同即覆盖公共定义，比如给某个知识点补关键词），或**独立库**（产品没覆盖的科目/省份，全部自己定义，必须给 `academic_year_range`）。同一用户同一分区只能有一个用户库（409）。
-- 解析规则：`find_partition(..., user_id=)` 先看用户库再看公共库，用户库存在就以它为准。创建任务、知识点匹配、报告的课程覆盖率、导出，用的都是这个"用户视角的有效分区"；`GET /api/knowledge-partitions` 列出的也是用户视角（用户库覆盖的分区标 `source: user`）。`GET /api/knowledge-partitions/points?stage&subject&province` 返回合并后的知识点，每个带 `origin: public|user`。
-- 管理接口：`GET/POST /api/knowledge-bases`，`GET/PUT/DELETE /api/knowledge-bases/{id}`，`POST /api/knowledge-bases/{id}/points`（新增或按 `knowledge_id` 覆盖），`DELETE /api/knowledge-bases/{id}/points/{knowledge_id}`，`POST /api/knowledge-bases/import`（上传与公共库同格式的 YAML，可带 `extends_public`/`name`），`GET /api/knowledge-bases/{id}/export`（YAML 下载）。每次写入都做完整校验（字段齐全、`knowledge_id` 唯一、`dependencies` 可解析——扩展公共库时可以引用公共 id、`grade_scope` 在年级范围内、置信度在 0-1），不合法返回 422 和具体原因；公共库更新导致某个用户库不再合法时，解析时跳过它退回公共库，管理接口的 `problem` 字段会说明原因。
-- 题目到知识点的匹配现在是**关键词 + 语义**：关键词命中一如既往；配置了 `match` 模型角色（`EXAM_DIAGNOSIS_MATCH_API_KEY`，默认 `deepseek-v4-flash`）时，把这道题和候选知识点列表（id/名称/章节/关键词）交给模型按语义挑选，结果和关键词命中合并——两边都命中的标 `keyword+model`，只有模型认出来的标 `model`（`matched_keywords` 为空，置信度取知识点置信度和模型把握的较小值）。模型不会删掉关键词命中；模型不可用/返回不合法就只剩关键词结果，不会瞎猜。`match` 和其它角色一样记进 `/api/model-calls`、受同一份预算约束。
-- 前端 `/knowledge` 页面：看所有分区和知识点，"在此之上建我的库"、添加/覆盖/删除知识点、导入/导出 YAML、删除自己的库（恢复为公共库）。
-
-## 知识库分区
-
-- `GET /api/knowledge-partitions` 返回全部可用分区及其版本、课程标准和知识点数量。
-- 首页“知识库分区”下拉框由该接口渲染，用户无法选择没有知识库的阶段/科目/省份组合。
-- 分区键是 `stage + subject + province + curriculum_year`；同一地区同一科目可以并存多套课程方案，创建任务不传 `curriculum_year` 时默认取最新的一套。
-- 分区的 `academic_year_range` 声明它覆盖哪些学年（如 `[高一, 高二, 高三]`）。分区内知识点的 `grade_scope` 必须落在这个范围内，否则加载即报错；创建任务时年级不在范围内会返回 422 `grade_outside_partition_scope`。
-- 创建任务时若 `stage/subject/province/curriculum_year` 没有对应分区，接口返回 422 `knowledge_partition_not_found` 并附带可用分区列表，不会创建出一个永远匹配不到知识点的任务。
-- 学年范围形如 `25-26` 或 `2025-2028`，必须至少覆盖一整学年；不足一学年（如 `25-25`）会被拒绝并返回规则说明，跨多学年则允许，任务上记录 `academic_year_start/end/span`。
-- 任务、分析报告和个人数据导出都记录所用分区（阶段、科目、省份、课程方案年份、覆盖学年、知识库版本、课程标准），知识点匹配结果也带上分区标识，便于追溯。
-
-## 解析失败与重跑
-
-- 解析作业按考试隔离：一个考试的作业失败不会影响同一任务下其它考试的解析和确认。
-- 重跑会先清掉这次考试上一轮的页面再重新解析，不会留下重复页面或重复题目。
-- 重跑保留两类用户输入：页面是否计入解析统计的显式判定，以及已经手工修改过的题目草稿（草稿会重新指向新生成的页面）。
-
-## 登录与多用户
-
-- 账号接口：`POST /api/auth/register`（用户名 3-32 位小写字母/数字/`_ . -`，密码至少 8 位）、`POST /api/auth/login`、`POST /api/auth/logout`、`GET /api/auth/me`。注册/登录返回一个 bearer token，后续请求带 `Authorization: Bearer <token>`；token 默认 30 天过期（`EXAM_DIAGNOSIS_SESSION_TTL_HOURS` 可调），退出即作废。
-- 密码用 pbkdf2-sha256（20 万轮、随机盐）存储，数据库里存的是 token 的 sha256 而不是 token 本身；登录连续失败 5 次后同一用户名 15 分钟内拒绝尝试（429）；"用户不存在"和"密码错误"返回同一个 `invalid_credentials`，不给枚举账号的机会。
-- 两种模式，由 `EXAM_DIAGNOSIS_AUTH_REQUIRED` 决定：
-  - 不开（默认）：和以前一样，没带 token 就按 `X-User-Id`（缺省 `local`）算身份，本地单人使用零配置。带了 token 以 token 为准；带了**无效/过期**的 token 直接 401，不会悄悄退回本地身份。
-  - 开启（`=1`）：除注册/登录外的所有接口都必须带有效 token，`X-User-Id` 完全不看——它只是个谁都能填的请求头，一旦有第二个真人就不能再当身份用。
-- 资源归属仍然沿用原来的 `user_id` 字段和 `enforce_resource_owner` 这一个检查点，登录只是换了"当前用户是谁"的来源；别人的资料一律 404。
-- 前端：`/login` 页面（登录/注册切换），token 存在 localStorage，请求自动带上；任何接口返回 401 就清掉 token 跳去登录页。页面右上角显示当前身份（"本地用户（未登录）"或账号显示名）和登录/退出。
-
-## 用户归属与资源隔离
-
-- MVP 按本地单用户运行，但领域模型保留了归属边界：任务、考试、资产、上传会话、任务作业、页面、题目记录、分析运行、验证题、掌握记录都带 `user_id`。
-- 归属从任务向下继承，请求头 `X-User-Id` 决定当前用户，缺省是 `local`。
-- 隔离在一个统一的依赖里检查，任何带资源 id 的路由都会走到，越权访问返回 404 而不是 403，避免泄露资源是否存在。
-- `GET /api/submissions` 只返回当前用户自己的任务。
-
-## 异科目与页面取舍
-
-- 解析出的科目与任务科目不符时，页面标记 `subject_mismatch`，`include_in_analysis` 置为 `false`，其题目不会进入题目草稿，也就不会进入解析统计。
-- 被排除的页面不会被删除，`GET /api/exams/{eid}/pages` 的 `excluded_pages` 会列出文件名、排除原因、判定方是系统还是用户，以及少算了多少道题。
-- 用户可以 `PATCH /api/pages/{page_id}` 传 `include_in_analysis` 显式覆盖：把误判的异科目页面重新纳入，或把不想统计的页面排除。覆盖后题目草稿立即重算，已经手工修改过的草稿内容会被保留。
-- 确认考试后 `completeness.excluded_pages` 会一并记录本次分析漏掉了哪些页面。
-
-## 页面与得分编辑
-
-- 考试详情页“页面与材料”里可以直接改材料类型、是否计入解析统计，对应 `PATCH /api/pages/{page_id}`。
-- 考试确认后出现“得分与批改”列表，可以填每题得分、满分和教师批注，对应 `PATCH /api/question-records/{record_id}`，失分自动计算。
-
-## 验证题答案复核门禁
-
-- 报告生成后会跑一个独立审查阶段（`report.review`），检查错因专题的知识点映射、证据引用，以及每道验证题的参考答案、知识点和来源题目。
-- 审查不通过的验证题标记为 `needs_review`，`GET /api/verification-questions/{id}` 和列表接口都会把 `answer` 置空并给出 `answer_withheld` 与 `withheld_reason`，Markdown/HTML 导出显示“未通过复核，答案暂不展示”。
-- 学生仍然可以作答未复核的验证题，被挡住的只是参考答案。
-- `POST /api/verification-questions/{id}/review` 传 `{approved, answer, note}` 完成人工复核；空答案不允许通过，返回 422 `cannot_approve_empty_answer`。复核通过后报告里的答案随即放开，分析结果本身不会重算。
-
-## 复习优先级与结论可信度
-
-- 知识树每个节点带 `question_count`、`wrong_count`、`error_rate`、`review_priority` 和 `priority_score`；优先级看错误率不只看错题数，一错一（1/1）比十错一（1/10）更值得复习。
-- 报告的 `review_order` 按优先级给出复习顺序，Markdown/HTML 导出里是“复习优先顺序”一节。
-- 报告的 `quality_flags` 把散落各处的“这个结论只能算部分成立”统一成一份清单：资料不完整、页面需人工确认、置信度偏低、页面被排除、题目未映射到知识点、得分未录入，每条都带 `code`、`severity` 和给人看的 `message`。
-- 导出报告里对应“结论可信度提示”一节；没有任何提示时该节不出现。
-
-## 课程范围与资料覆盖范围
-
-报告的 `scope_coverage` 把知识库分区的课程范围和本次考试资料实际考查到的范围分开呈现，Markdown/HTML 导出同样有这一节：
-
-- 每个课程知识点标记为 `assessed_with_errors`、`assessed_without_errors` 或 `not_assessed`。
-- 汇总课程知识点总数、已考查数、未考查数、覆盖率和未考查章节列表。
-- `not_assessed` 只表示本次上传的资料没有覆盖该知识点，不能据此判定学生未掌握。
-
-## 解析版本与报告追溯
-
-- 年级统一使用短形式：`高一`/`高二`/`高三`（初中、小学同理，如 `初二`），与知识库 YAML 的 `grade_scope` 保持一致。
-- 撤销确认（reopen）会把考试版本加一，并把该考试原有题目记录标记为 `superseded`，保留历史而不删除。
-- 分析任务创建时快照所选考试的版本，报告输出 `exam_versions`，Markdown/HTML 导出也会写明依据的版本。
-- 分析任务创建后考试又被撤销确认的，生成报告返回 409 `exam_versions_changed`，需要重新确认并新建分析任务；旧报告保持可查看且仍指向旧版本。
-
-## 演示流程
-
-1. 首页选择知识库分区并创建任务。
-2. 创建考试。
-3. 选择并上传文本、PDF 或图片。
-4. 点击“运行解析”。文本走本地解析，PDF走真实文本提取，图片走已配置视觉解析器或人工确认降级。
-5. 在解析确认区编辑题干、勾选错题、填写学生答案，并确认原题来源状态。
-6. 确认考试。
-7. 点击“确认并开始分析”。系统在分析前自动进行知识点映射。
-8. 查看包含错题集、错因、规避建议、知识树、优先级和验证题的报告。
-9. 可通过以下接口导出：
-
-```text
-GET /api/reports/{analysis_run_id}/export?format=md
-GET /api/reports/{analysis_run_id}/export?format=html
+```
+POST /api/submissions                                   create a submission (stage / subject / province / grade / years)
+POST /api/submissions/{sid}/exams                       add an exam
+POST /api/exams/{eid}/upload-sessions                   open an upload session
+POST /api/upload-sessions/{sid}/assets                  upload files (multipart) · POST .../finish creates the parse job
+POST /api/jobs/{jid}/enqueue                            parse in the background · GET /api/jobs/{jid} · POST .../retry
+GET  /api/exams/{eid}/pages · PATCH /api/pages/{pid}     material type / include_in_analysis
+GET  /api/exams/{eid}/parse-draft · PATCH .../parse-draft/questions/{i}    review the split questions
+POST /api/exams/{eid}/confirm                           confirm (422 questions_required / wrong_question_original_required)
+POST /api/exams/{eid}/reopen · /reparse                 bump version and supersede records · parse again
+PATCH /api/question-records/{rid}                       scores, teacher marks
+POST /api/submissions/{sid}/analysis-runs → POST /api/analysis-runs/{rid}/confirm-start → /generate
+GET  /api/analysis-runs/{rid}/report · GET /api/reports/{rid}/export?format=md|html|pdf|docx
+GET  /api/analysis-runs/{rid}/verification-questions · POST /api/verification-questions/{vid}/attempts · /review
+GET  /api/submissions/{sid}/trends · /wrong-questions · /mastery-records · GET /api/review-plan
+GET  /api/submissions/{sid}/export · POST /api/submissions/import       portable bundles
+POST/GET/DELETE /api/exams/{eid}/mobile-upload           phone upload channel
+GET  /api/knowledge-partitions · /api/knowledge-bases…
+GET  /api/system/status · /api/model-calls · /api/tasks · GET/PUT /api/settings · GET /api/health
 ```
 
-## 学习闭环与数据管理
+Interactive documentation is at `/docs` (FastAPI) while the backend runs.
 
-- 分析报告生成后，验证题作为 SQLite 持久化实体保存，可按分析任务查询。
-- 每次验证提交保存答案、得分、是否通过和用时。
-- 掌握记录按“知识点 + 错误簇”维护，状态为 `not_started`、`in_progress`、`provisionally_resolved` 或 `resolved`；再次验证失败会回退到 `in_progress`，所有尝试保留历史。
-- 支持页面页序/材料类型修改、题目得分与教师批改修改。
-- 同一考试内按内容哈希判重：字节相同的图片无论文件名是什么都会被拒绝，并返回已存在资源的 ID、文件名和 sha256；不同考试之间互不影响。
-- 题目的机器识别值、用户修正值和最终确认值组成溯源链，随考试确认写入题目记录，并出现在个人数据导出中。
-- 考试确认时报告完整度：错题、原题来源、标准答案、学生作答、教师批改五项，缺哪项由 `completeness.missing` 明确列出；缺失不阻塞分析。
-- 支持分析历史恢复、任务个人数据 JSON 导出和任务删除。
-- 浏览器报告页可直接完成验证题、查看提交结果与掌握状态。
+## Development
 
-## 当前限制
+```bash
+python -m pip install -e .[dev]
+python -m pytest -q                 # backend tests, no model keys needed, no paid calls ever
+npm --prefix frontend run lint      # oxlint
+npm --prefix frontend run build     # tsc -b && vite build
+python scripts/check.py             # all three, exactly what CI runs (--backend / --frontend for one side)
+```
 
-以下是**现在仍然成立**的限制（做掉的项目会从这里删掉，别让这一节变成历史档案）：
+- Tests never make network calls: `tests/conftest.py` scrubs every `EXAM_DIAGNOSIS_*_API_KEY` and the `EXAM_DIAGNOSIS_DEFAULT_*` variables from the environment, and `app.py` refuses to load `.env.local` under pytest. Each test gets an isolated SQLite file.
+- CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs the backend tests on Ubuntu and Windows (the parent-process watchdog differs per platform) and the frontend `npm ci → lint → build`.
+- `scripts/verify_server.py` drives a running server through the full flow; `scripts/build_backend.py --smoke-only` re-runs the packaged-backend smoke test.
+- Frontend pages are lazy-loaded chunks; responsive below 720 px; antd messages go through `src/feedback.tsx` so they render inside the `App` context.
 
-- 公共知识库目前只随仓库提供广东高中数学一个分区，且只有 14 个占位知识点；小学 / 初中 / 其它科目需要补对应 YAML 才能创建任务。内容建设是产品成型后的阶段，机制（公共库 + 用户自维护库）已经就绪。
-- 图片和扫描 PDF 的识别依赖外部 OpenAI-compatible 视觉服务；没配置时明确标记为待人工确认，不会伪造 OCR 成功。
-- 验证题的自动批改是模型按参考答案给分，不是符号计算意义上的数学判定；参考答案未通过复核时退回学生自评。
-- 桌面版没有自动更新，也没有代码签名（首次运行会被 SmartScreen 拦一次）。
-- 数据只在本机：没有云同步，换机器要靠导出 / 导入。
-- 删除任务会级联删除该任务在 SQLite 中的考试、题目、分析、验证与掌握记录，并擦除 `<data_dir>/uploads/` 下属于该任务的物理文件。
+## Project layout
+
+```
+exam_diagnosis/        FastAPI backend
+  app.py               routes, task wiring, middleware
+  storage.py           SQLite-backed mappings
+  llm.py               role-based OpenAI-compatible client, provider defaults
+  parser.py            text / PDF / vision parsing
+  knowledge.py         public + user knowledge bases, matching
+  analysis.py, report.py, export.py, trends.py, review_plan.py, wrong_book.py, transfer.py
+  auth.py, settings.py, paths.py, env_file.py
+  mobile.py, lan_listener.py     phone upload channel
+  tasks.py             in-process task queue
+  server.py            desktop entry (--port 0, --data-dir, --parent-pid)
+frontend/              React + TypeScript + Vite + antd
+  src-tauri/           Tauri 2 desktop shell (Rust)
+data/knowledge/        public knowledge-base partitions (YAML)
+scripts/               build_backend.py, check.py, verify_server.py, backend_entry.py
+tests/                 pytest suite
+```
+
+## Current limitations
+
+These hold **today**; items are removed from this list when done.
+
+- The public knowledge base ships one partition (Guangdong, high-school mathematics) with 14 placeholder knowledge points. Other stages, subjects and regions need their own YAML before a submission can be created for them.
+- Image and scanned-PDF recognition needs an external OpenAI-compatible vision service; without one, pages are marked for manual confirmation rather than pretending OCR succeeded.
+- Automatic grading is a model's judgement against a reviewed reference answer, not symbolic mathematics; it falls back to self-assessment when the answer is unreviewed.
+- The desktop build has no auto-update and no code signing (SmartScreen warns once on first run).
+- Data stays on one machine — no sync; move between machines with export/import.
+- Deleting a submission cascades through its exams, questions, analyses, verification and mastery records and removes its files under `uploads/`.
+
+## Contributing, security, license
+
+- [CONTRIBUTING.md](CONTRIBUTING.md) — how to set up, test and submit changes.
+- [SECURITY.md](SECURITY.md) — reporting vulnerabilities; what the application does and does not protect.
+- [CHANGELOG.md](CHANGELOG.md).
+- License: see [LICENSE](LICENSE).

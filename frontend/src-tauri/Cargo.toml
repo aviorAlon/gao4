@@ -2,7 +2,7 @@
 name = "exam-diagnosis-desktop"
 version = "0.1.0"
 description = "Exam Diagnosis desktop shell: the web UI in a native window, talking to the local API backend"
-authors = ["Exam Diagnosis"]
+authors = ["Exam Diagnosis contributors"]
 license = ""
 repository = ""
 edition = "2021"

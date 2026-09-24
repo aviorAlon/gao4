@@ -2,13 +2,13 @@
 from fastapi.testclient import TestClient
 
 import exam_diagnosis.app as app_module
-from exam_diagnosis.llm import ROLE_DEFAULTS, role_status
+from exam_diagnosis.llm import BUILTIN_PROVIDER, ROLE_DEFAULTS, role_status
 
 
 def test_role_status_reports_configuration_without_the_key(monkeypatch):
     monkeypatch.delenv('EXAM_DIAGNOSIS_ANALYSIS_API_KEY', raising=False)
     off = role_status('analysis')
-    assert off['configured'] is False and off['model'] == 'deepseek-v4-pro' and off['purpose'] == '错因诊断'
+    assert off['configured'] is False and off['model'] == BUILTIN_PROVIDER['reasoning_model'] and off['purpose'] == '错因诊断'
     monkeypatch.setenv('EXAM_DIAGNOSIS_ANALYSIS_API_KEY', 'sk-secret-value')
     monkeypatch.setenv('EXAM_DIAGNOSIS_ANALYSIS_MODEL', 'custom-model')
     on = role_status('analysis')
@@ -35,6 +35,7 @@ def test_status_endpoint_lists_every_role_and_never_leaks_secrets(monkeypatch):
     assert body['budget'] == {'daily_token_budget': None, 'max_calls_per_minute': None, 'block_reason': None}
     assert body['application']['name'] == 'Exam Diagnosis'
     assert body['features'] == {'qr_code': True}
+    assert body['model_provider']['base_url'] == BUILTIN_PROVIDER['base_url'] and body['model_provider']['base_url_source'] == 'builtin'
     assert body['storage']['database'].endswith('.sqlite3')
     assert any(p['stage'] == 'high' and p['subject'] == '数学' for p in body['knowledge']['partitions'])
 

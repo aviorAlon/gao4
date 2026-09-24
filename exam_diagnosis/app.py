@@ -43,7 +43,7 @@ from . import settings as app_settings
 # means client_from_env() stops returning None in tests, and every test that reaches report
 # generation silently makes real, paid calls to the model provider instead of exercising the
 # fallback path it was written to test — discovered the hard way as a "hung" test suite that was
-# actually just waiting tens of seconds per test on real DeepSeek responses. `importlib.reload`
+# actually just waiting tens of seconds per test on real model responses. `importlib.reload`
 # of this module (see test_app.py's restart test) re-runs this exact line, so this guard has to
 # live here, not just in a conftest fixture that only runs once per session.
 if 'pytest' not in sys.modules:
@@ -133,8 +133,8 @@ MODEL_CALLS_MAX = 500
 
 # FastAPI runs sync `def` route handlers in a thread pool, so two near-simultaneous GET requests
 # for the same not-yet-generated report both run get_analysis_report concurrently. Report
-# generation now makes real, paid model calls and can take tens of seconds (deepseek-v4-pro's
-# thinking mode is not fast) — a wide enough window that both requests can pass the
+# generation now makes real, paid model calls and can take tens of seconds (a reasoning-tier
+# model's thinking mode is not fast) — a wide enough window that both requests can pass the
 # `status == 'queued'` check before either has flipped it, and both pay to regenerate the same
 # report. One process-wide lock serializes just the check-and-claim step (not the generation
 # itself), which is enough for a local single-user MVP where true concurrent report generation
@@ -1798,6 +1798,9 @@ def system_status(user_id: str = Depends(current_user_id)):
         'auth': {'required': AUTH_REQUIRED, 'session_ttl_hours': SESSION_TTL_HOURS},
         'storage': {'data_dir': str(paths.data_dir()), 'database': str(SUBMISSIONS.path), 'uploads': str(paths.uploads_dir()), 'config': str(paths.config_path())},
         'model_roles': roles,
+        # What every role falls back to for base_url/model, and whether that came from the
+        # environment, the settings page or the built-in profile.
+        'model_provider': app_settings.provider_status(),
         'budget': {
             'daily_token_budget': MODEL_DAILY_TOKEN_BUDGET,
             'max_calls_per_minute': MODEL_MAX_CALLS_PER_MINUTE,
@@ -1827,6 +1830,7 @@ def health():
 
 class SettingsIn(BaseModel):
     roles: dict[str, dict[str, Any]] = {}
+    provider: dict[str, Any] = {}
     budget: dict[str, Any] = {}
 
 
@@ -1842,7 +1846,7 @@ def update_settings(body: SettingsIn):
     by whichever account happens to be logged in."""
     if AUTH_REQUIRED:
         return JSONResponse({'error': 'settings_locked_in_multi_user_mode'}, status_code=403)
-    locked = app_settings.locked_fields(body.roles, body.budget)
+    locked = app_settings.locked_fields(body.roles, body.budget, body.provider)
     if locked:
         return JSONResponse({'error': 'locked_by_environment', 'fields': locked}, status_code=409)
     try:

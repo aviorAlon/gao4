@@ -1,4 +1,5 @@
-"""Runtime settings stored in <data_dir>/config.json: model-role credentials and the cost budget.
+"""Runtime settings stored in <data_dir>/config.json: model-role credentials, the provider-wide
+model defaults and the cost budget.
 
 The web deployment configures these through environment variables / .env.local, and that keeps
 working unchanged. This module exists for the desktop build, where "edit a dotfile and set env
@@ -22,11 +23,13 @@ from pathlib import Path
 from typing import Any
 
 from . import paths
-from .llm import ROLE_DEFAULTS, ROLE_PURPOSES
+from .llm import BUILTIN_PROVIDER, PROVIDER_ENV, ROLE_DEFAULTS, ROLE_PURPOSES, role_defaults
 
 VISION_ROLE = 'vision'
 CONFIGURABLE_ROLES = tuple(ROLE_DEFAULTS) + (VISION_ROLE,)
 ROLE_FIELDS = ('api_key', 'base_url', 'model', 'timeout')
+# Provider-wide defaults every role falls back to (see llm.role_defaults); config.json section 'provider'.
+PROVIDER_FIELDS = tuple(PROVIDER_ENV)
 BUDGET_FIELDS = {
     'daily_token_budget': 'EXAM_DIAGNOSIS_MODEL_DAILY_TOKEN_BUDGET',
     'max_calls_per_minute': 'EXAM_DIAGNOSIS_MODEL_MAX_CALLS_PER_MINUTE',
@@ -92,6 +95,14 @@ def apply_config(config: dict[str, Any]) -> None:
             if not os.environ.get(name):
                 os.environ[name] = str(value)
                 _APPLIED.add(name)
+    for field in PROVIDER_FIELDS:
+        value = (config.get('provider') or {}).get(field)
+        if value in (None, ''):
+            continue
+        name = PROVIDER_ENV[field]
+        if not os.environ.get(name):
+            os.environ[name] = str(value)
+            _APPLIED.add(name)
     for key, name in BUDGET_FIELDS.items():
         value = (config.get('budget') or {}).get(key)
         if value in (None, '', 0):
@@ -112,7 +123,7 @@ def describe() -> dict[str, Any]:
     from — the key itself never leaves the process."""
     roles = []
     for role in CONFIGURABLE_ROLES:
-        defaults = ROLE_DEFAULTS.get(role, {'base_url': None, 'model': None})
+        defaults = role_defaults(role) if role in ROLE_DEFAULTS else {'base_url': None, 'model': None}
         key_name = env_name(role, 'api_key')
         entry: dict[str, Any] = {
             'role': role, 'purpose': ROLE_PURPOSE.get(role, role),
@@ -145,10 +156,27 @@ def describe() -> dict[str, Any]:
         except ValueError:
             budget[key] = None
         budget[f'{key}_source'] = _source(name) if raw else None
-    return {'roles': roles, 'budget': budget, 'config_path': str(paths.config_path())}
+    provider: dict[str, Any] = {}
+    for field, name in PROVIDER_ENV.items():
+        raw = os.getenv(name)
+        provider[field] = raw or None
+        provider[f'{field}_source'] = _source(name) if raw else None
+        provider[f'{field}_default'] = BUILTIN_PROVIDER[field]
+    return {'roles': roles, 'provider': provider, 'budget': budget, 'config_path': str(paths.config_path())}
 
 
-def locked_fields(role_changes: dict[str, Any], budget_changes: dict[str, Any]) -> list[str]:
+def provider_status() -> dict[str, Any]:
+    """The provider-wide defaults as every role currently resolves them, each tagged with where it
+    came from: 'env', 'config' (settings page) or 'builtin'."""
+    status: dict[str, Any] = {}
+    for field, name in PROVIDER_ENV.items():
+        raw = os.getenv(name)
+        status[field] = raw or BUILTIN_PROVIDER[field]
+        status[f'{field}_source'] = (_source(name) if raw else None) or 'builtin'
+    return status
+
+
+def locked_fields(role_changes: dict[str, Any], budget_changes: dict[str, Any], provider_changes: dict[str, Any] | None = None) -> list[str]:
     """Env-owned variables the caller is trying to change — a config.json value would never take
     effect over them, so refusing is more honest than silently saving something inert."""
     locked = []
@@ -159,6 +187,10 @@ def locked_fields(role_changes: dict[str, Any], budget_changes: dict[str, Any]) 
                 locked.append(name)
     for key in (budget_changes or {}):
         name = BUDGET_FIELDS.get(key)
+        if name and os.getenv(name) and name not in _APPLIED:
+            locked.append(name)
+    for field in (provider_changes or {}):
+        name = PROVIDER_ENV.get(field)
         if name and os.getenv(name) and name not in _APPLIED:
             locked.append(name)
     return locked
@@ -194,6 +226,21 @@ def merge_changes(config: dict[str, Any], changes: dict[str, Any]) -> dict[str, 
                 target[field] = value.strip()
         if not target:
             merged['roles'].pop(role, None)
+    provider_changes = changes.get('provider') or {}
+    if not isinstance(provider_changes, dict):
+        raise ValueError('provider settings must be an object')
+    for field, value in provider_changes.items():
+        if field not in PROVIDER_FIELDS:
+            raise ValueError(f'unknown provider field: {field}')
+        target = merged.setdefault('provider', {})
+        if value in (None, ''):
+            target.pop(field, None)
+        elif not isinstance(value, str):
+            raise ValueError(f'provider {field} must be a string')
+        else:
+            target[field] = value.strip()
+        if not target:
+            merged.pop('provider', None)
     for key, value in (changes.get('budget') or {}).items():
         if key not in BUDGET_FIELDS:
             raise ValueError(f'unknown budget field: {key}')

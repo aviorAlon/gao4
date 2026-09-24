@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import exam_diagnosis.app as app_module
-from exam_diagnosis import paths, settings
+from exam_diagnosis import llm, paths, settings
 
 
 @pytest.fixture(autouse=True)
@@ -91,7 +91,7 @@ def test_describe_reports_source_and_never_the_key(monkeypatch):
     by_role = {r['role']: r for r in described['roles']}
     assert set(by_role) == set(settings.CONFIGURABLE_ROLES)
     assert by_role['analysis']['api_key_set'] and by_role['analysis']['api_key_source'] == 'config' and by_role['analysis']['configured'] and not by_role['analysis']['locked']
-    assert by_role['analysis']['timeout'] == 45.0 and by_role['analysis']['timeout_source'] == 'config' and by_role['analysis']['model'] is None and by_role['analysis']['model_default'] == 'deepseek-v4-pro'
+    assert by_role['analysis']['timeout'] == 45.0 and by_role['analysis']['timeout_source'] == 'config' and by_role['analysis']['model'] is None and by_role['analysis']['model_default'] == llm.BUILTIN_PROVIDER['reasoning_model']
     assert by_role['verify']['api_key_source'] == 'env' and by_role['verify']['locked']
     assert by_role['report']['api_key_set'] is False and by_role['report']['api_key_source'] is None
     assert by_role['vision']['configured'] is False  # base_url set but no model → not usable
@@ -126,7 +126,72 @@ def test_locked_fields_only_flags_environment_owned_values(monkeypatch):
     assert settings.locked_fields({}, {'max_calls_per_minute': 1}) == ['EXAM_DIAGNOSIS_MODEL_MAX_CALLS_PER_MINUTE']
 
 
+# --- provider-wide defaults ------------------------------------------------------------------------
+
+
+def test_provider_defaults_from_config_flow_into_every_role():
+    settings.apply_config({'provider': {'base_url': 'https://cfg.example/v1', 'reasoning_model': 'cfg-big'}})
+    described = settings.describe()
+    provider = described['provider']
+    assert provider['base_url'] == 'https://cfg.example/v1' and provider['base_url_source'] == 'config'
+    assert provider['fast_model'] is None and provider['fast_model_source'] is None and provider['fast_model_default'] == llm.BUILTIN_PROVIDER['fast_model']
+    by_role = {r['role']: r for r in described['roles']}
+    assert by_role['analysis']['base_url_default'] == 'https://cfg.example/v1' and by_role['analysis']['model_default'] == 'cfg-big'
+    assert by_role['split']['base_url_default'] == 'https://cfg.example/v1' and by_role['split']['model_default'] == llm.BUILTIN_PROVIDER['fast_model']
+    assert by_role['vision']['base_url_default'] is None  # the vision parser has no provider fallback: all three of its vars are required
+    assert settings.provider_status()['reasoning_model_source'] == 'config' and settings.provider_status()['fast_model_source'] == 'builtin'
+    # re-applying without the section removes it again
+    settings.apply_config({})
+    assert 'EXAM_DIAGNOSIS_DEFAULT_BASE_URL' not in os.environ
+    assert settings.describe()['roles'][0]['base_url_default'] == llm.BUILTIN_PROVIDER['base_url']
+
+
+def test_environment_owns_provider_defaults_over_config(monkeypatch):
+    monkeypatch.setenv('EXAM_DIAGNOSIS_DEFAULT_BASE_URL', 'https://env.example/v1')
+    settings.apply_config({'provider': {'base_url': 'https://cfg.example/v1', 'fast_model': 'cfg-small'}})
+    assert os.environ['EXAM_DIAGNOSIS_DEFAULT_BASE_URL'] == 'https://env.example/v1'
+    assert os.environ['EXAM_DIAGNOSIS_DEFAULT_FAST_MODEL'] == 'cfg-small'
+    assert settings.locked_fields({}, {}, {'base_url': 'x', 'fast_model': 'y'}) == ['EXAM_DIAGNOSIS_DEFAULT_BASE_URL']
+    assert settings.provider_status()['base_url_source'] == 'env'
+
+
+def test_merge_changes_handles_the_provider_section():
+    merged = settings.merge_changes({}, {'provider': {'base_url': ' https://p.example/v1 ', 'fast_model': 'f'}})
+    assert merged == {'provider': {'base_url': 'https://p.example/v1', 'fast_model': 'f'}}
+    cleared = settings.merge_changes(merged, {'provider': {'fast_model': ''}})
+    assert cleared == {'provider': {'base_url': 'https://p.example/v1'}}
+    assert settings.merge_changes(cleared, {'provider': {'base_url': None}}) == {}
+    for bad in ({'provider': {'colour': 'x'}}, {'provider': {'base_url': 5}}, {'provider': 'nope'}):
+        with pytest.raises(ValueError):
+            settings.merge_changes({}, bad)
+
+
 # --- API -------------------------------------------------------------------------------------------
+
+
+def test_settings_api_saves_provider_defaults_and_reports_them_in_status():
+    client = TestClient(app_module.app)
+    response = client.put('/api/settings', json={'provider': {'base_url': 'https://ui.example/v1', 'reasoning_model': 'ui-big'}, 'roles': {'grade': {'api_key': 'sk-ui'}}})
+    assert response.status_code == 200, response.json()
+    saved = response.json()
+    assert saved['provider']['base_url'] == 'https://ui.example/v1' and saved['provider']['base_url_source'] == 'config'
+    grade = next(r for r in saved['roles'] if r['role'] == 'grade')
+    assert grade['base_url_default'] == 'https://ui.example/v1' and grade['model_default'] == 'ui-big' and grade['configured']
+    assert app_module.client_from_env('grade').base_url == 'https://ui.example/v1' and app_module.client_from_env('grade').model == 'ui-big'
+    assert json.loads(paths.config_path().read_text(encoding='utf-8'))['provider'] == {'base_url': 'https://ui.example/v1', 'reasoning_model': 'ui-big'}
+    status = client.get('/api/system/status').json()
+    assert status['model_provider']['base_url'] == 'https://ui.example/v1' and status['model_provider']['base_url_source'] == 'config'
+    assert status['model_provider']['fast_model_source'] == 'builtin'
+    assert next(r for r in status['model_roles'] if r['role'] == 'grade')['model'] == 'ui-big'
+    bad = client.put('/api/settings', json={'provider': {'nope': 'x'}})
+    assert bad.status_code == 422 and bad.json()['error'] == 'invalid_settings'
+
+
+def test_settings_api_refuses_env_owned_provider_defaults(monkeypatch):
+    monkeypatch.setenv('EXAM_DIAGNOSIS_DEFAULT_REASONING_MODEL', 'env-big')
+    client = TestClient(app_module.app)
+    locked = client.put('/api/settings', json={'provider': {'reasoning_model': 'other'}})
+    assert locked.status_code == 409 and locked.json() == {'error': 'locked_by_environment', 'fields': ['EXAM_DIAGNOSIS_DEFAULT_REASONING_MODEL']}
 
 
 def test_settings_api_saves_applies_and_reports(monkeypatch):
