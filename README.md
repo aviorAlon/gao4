@@ -297,4 +297,4 @@ These hold **today**; items are removed from this list when done.
 - [CONTRIBUTING.md](CONTRIBUTING.md) — how to set up, test and submit changes.
 - [SECURITY.md](SECURITY.md) — reporting vulnerabilities; what the application does and does not protect.
 - [CHANGELOG.md](CHANGELOG.md).
-- License: see [LICENSE](LICENSE).
+- License: [Apache License 2.0](LICENSE).

@@ -1,6 +1,7 @@
 {
   "name": "exam-diagnosis-frontend",
   "private": true,
+  "license": "Apache-2.0",
   "version": "0.1.0",
   "description": "Exam Diagnosis web UI (React + Vite + antd), also the page inside the Tauri desktop shell",
   "type": "module",

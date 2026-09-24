@@ -297,4 +297,4 @@ tests/                 pytest 测试
 - [CONTRIBUTING.md](CONTRIBUTING.md)——环境搭建、测试与提交变更。
 - [SECURITY.md](SECURITY.md)——漏洞报告；应用保护什么、不保护什么。
 - [CHANGELOG.md](CHANGELOG.md)。
-- 许可：见 [LICENSE](LICENSE)。
+- 许可：[Apache License 2.0](LICENSE)。

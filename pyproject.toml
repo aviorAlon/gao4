@@ -7,10 +7,13 @@ name = "exam-diagnosis"
 version = "0.1.0"
 description = "Local-first exam diagnosis: parse a student's exam papers, map wrong questions to knowledge points, diagnose root causes and generate reports, practice and review plans."
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 keywords = ["education", "exam", "diagnosis", "knowledge-points", "fastapi", "tauri", "local-first"]
 classifiers = [
   "Development Status :: 3 - Alpha",
+  "License :: OSI Approved :: Apache Software License",
   "Environment :: Web Environment",
   "Framework :: FastAPI",
   "Intended Audience :: Education",
