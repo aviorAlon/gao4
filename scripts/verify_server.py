@@ -23,6 +23,6 @@ os.environ['EXAM_DIAGNOSIS_AUTH_REQUIRED'] = '0'
 
 import uvicorn  # noqa: E402
 
-port = int(sys.argv[1]) if len(sys.argv) > 1 else 8766
+port = int(sys.argv[1]) if len(sys.argv) > 1 else 8767
 print(f'verify server: state in {state_dir}, port {port}')
 uvicorn.run('exam_diagnosis.app:app', host='127.0.0.1', port=port)
