@@ -2,6 +2,7 @@
   "name": "exam-diagnosis-frontend",
   "private": true,
   "license": "Apache-2.0",
+  "repository": { "type": "git", "url": "git+https://github.com/aviorAlon/gao4.git", "directory": "frontend" },
   "version": "0.1.0",
   "description": "Exam Diagnosis web UI (React + Vite + antd), also the page inside the Tauri desktop shell",
   "type": "module",

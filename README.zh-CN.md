@@ -2,6 +2,8 @@
 
 [English](README.md) · **简体中文**
 
+[![CI](https://github.com/aviorAlon/gao4/actions/workflows/ci.yml/badge.svg)](https://github.com/aviorAlon/gao4/actions/workflows/ci.yml) [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 一个本地优先的工具，把学生的考试卷变成一份诊断：哪些题错了、对应哪些知识点、**为什么**错、接下来该练什么、跨越多场考试后趋势如何。提供网页版（FastAPI 后端 + React 前端）和自带后端的 Windows 桌面版（Tauri）。
 
 一切都在你自己的机器上运行。模型推理是可选、可插拔的：任何 OpenAI-compatible 服务商都能用，按角色逐个启用；每一步都有确定性的兜底逻辑，而且兜底就明说是兜底——应用绝不会伪造一个它没有真正拿到的 OCR 结果、诊断或评分。
@@ -63,7 +65,7 @@
 要求：Python 3.11+，Node.js 20+（CI 用 24）。Rust 只在打桌面包时需要。
 
 ```bash
-git clone <本仓库> exam_diagnosis
+git clone git@github.com:aviorAlon/gao4.git exam_diagnosis
 cd exam_diagnosis
 python -m pip install -e .[dev]
 ```

@@ -27,6 +27,12 @@ classifiers = [
 ]
 dependencies = ["fastapi", "uvicorn", "python-multipart", "PyYAML", "PyMuPDF", "fonttools", "python-docx", "qrcode"]
 
+[project.urls]
+Homepage = "https://github.com/aviorAlon/gao4"
+Repository = "https://github.com/aviorAlon/gao4"
+Issues = "https://github.com/aviorAlon/gao4/issues"
+Changelog = "https://github.com/aviorAlon/gao4/blob/master/CHANGELOG.md"
+
 [project.optional-dependencies]
 # `pip install -e .[dev]` — what the test suite and CI need on top of the runtime dependencies.
 dev = ["pytest", "httpx"]

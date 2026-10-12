@@ -2,6 +2,8 @@
 
 **English** · [简体中文](README.zh-CN.md)
 
+[![CI](https://github.com/aviorAlon/gao4/actions/workflows/ci.yml/badge.svg)](https://github.com/aviorAlon/gao4/actions/workflows/ci.yml) [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 A local-first tool that turns a student's exam papers into a diagnosis: which questions went wrong, which knowledge points they map to, *why* they went wrong, what to practise next, and how the picture changes across exams. It ships as a web app (FastAPI backend + React frontend) and as a Windows desktop app (Tauri) that embeds the backend.
 
 Everything runs on your machine. Model inference is optional and pluggable: any OpenAI-compatible provider works, one role at a time, and every step has a deterministic fallback that is honest about being a fallback — the application never fakes an OCR result, a diagnosis or a grade it did not actually obtain.
@@ -63,7 +65,7 @@ upload ──► parse (text / PDF / vision) ──► review & confirm question
 Requirements: Python 3.11+, Node.js 20+ (CI uses 24). Rust is only needed for the desktop build.
 
 ```bash
-git clone <this repository> exam_diagnosis
+git clone git@github.com:aviorAlon/gao4.git exam_diagnosis
 cd exam_diagnosis
 python -m pip install -e .[dev]
 ```
