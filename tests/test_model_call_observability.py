@@ -10,6 +10,10 @@ from exam_diagnosis.llm import ChatClient
 
 
 def _server(handler_cls):
+    """Handlers must drain the request body before answering. Replying and closing with unread
+    bytes still in the socket makes the OS send a RST, and on Windows the client then sees
+    ConnectionResetError instead of the response — which showed up as a flaky `attempts == 2`
+    (the client's retry succeeded, the first attempt had been reset)."""
     server = HTTPServer(('127.0.0.1', 0), handler_cls)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
@@ -18,6 +22,7 @@ def _server(handler_cls):
 def test_on_call_fires_once_on_success_with_latency_and_usage():
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
+            self.rfile.read(int(self.headers.get('Content-Length') or 0))  # drain the body: see _server
             body = json.dumps({
                 'choices': [{'message': {'content': '{"ok": true}'}}],
                 'usage': {'prompt_tokens': 10, 'completion_tokens': 5, 'total_tokens': 15},
@@ -53,6 +58,7 @@ def test_on_call_fires_once_on_success_with_latency_and_usage():
 def test_on_call_fires_once_on_final_failure_after_retries_exhausted():
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
+            self.rfile.read(int(self.headers.get('Content-Length') or 0))  # drain the body: see _server
             self.send_response(500)
             self.end_headers()
 
@@ -79,6 +85,7 @@ def test_on_call_fires_once_on_final_failure_after_retries_exhausted():
 def test_on_call_exception_never_breaks_the_real_call():
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
+            self.rfile.read(int(self.headers.get('Content-Length') or 0))  # drain the body: see _server
             body = json.dumps({'choices': [{'message': {'content': '{"ok": true}'}}]}).encode()
             self.send_response(200)
             self.send_header('Content-Length', str(len(body)))

@@ -42,6 +42,8 @@ def test_api_nested_update_is_visible_after_process_restart(tmp_path, monkeypatc
 from exam_diagnosis.storage import SQLiteMapping
 print(SQLiteMapping('question_records')[__import__('sys').argv[1]]['correction']['teacher_comment'])
 """
-    env = os.environ.copy(); env['PYTHONPATH'] = os.getcwd(); env['EXAM_DIAGNOSIS_DB'] = str(db)
-    result = subprocess.run([sys.executable, '-c', reader, record_id], env=env, check=True, capture_output=True, text=True)
+    # The child prints Chinese: pin its stdout to UTF-8, or a Windows runner whose console code
+    # page is cp1252 dies with UnicodeEncodeError before the assertion is ever reached.
+    env = os.environ.copy(); env['PYTHONPATH'] = os.getcwd(); env['EXAM_DIAGNOSIS_DB'] = str(db); env['PYTHONIOENCODING'] = 'utf-8'
+    result = subprocess.run([sys.executable, '-c', reader, record_id], env=env, check=True, capture_output=True, text=True, encoding='utf-8')
     assert result.stdout.strip() == '条件遗漏'
